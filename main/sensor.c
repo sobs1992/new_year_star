@@ -1,3 +1,4 @@
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,6 +19,7 @@
 #define OFFLINE_MS          2000  /* radar reports ~10 frames/s */
 #define ACK_TIMEOUT_MS      500
 #define APPLY_RETRY_MS      5000
+#define RECOVER_MS          5000  /* silent this long: restart the radar, again after as long */
 #define NO_ONE_DURATION_S   5     /* radar's hold time before "no one" (factory value); with less,
                                      a sitting person flickers between present and absent */
 #define MAX_FRAME           64
@@ -32,6 +34,7 @@
 #define CMD_SET_GATES       0x0060
 #define CMD_SET_SENSITIVITY 0x0064
 #define CMD_READ_PARAMS     0x0061
+#define CMD_RESTART         0x00A3
 
 /* Factory energy thresholds per gate (user manual, table 7). Near gates are noisier, so the
  * radar is less sensitive there; still thresholds of gates 0-1 cannot be set. */
@@ -44,6 +47,7 @@ static const uint8_t DATA_HEAD[4] = { 0xF4, 0xF3, 0xF2, 0xF1 };
 static const uint8_t DATA_TAIL[4] = { 0xF8, 0xF7, 0xF6, 0xF5 };
 static const uint8_t CMD_HEAD[4] = { 0xFD, 0xFC, 0xFB, 0xFA };
 static const uint8_t CMD_TAIL[4] = { 0x04, 0x03, 0x02, 0x01 };
+static const uint8_t ENABLE_CONFIG_VALUE[2] = { 0x01, 0x00 };
 
 typedef enum {
     FRAME_NONE,
@@ -56,6 +60,15 @@ typedef struct {
     size_t len;
 } parser_t;
 
+/* What the radar holds in its flash */
+typedef struct {
+    uint8_t max_moving_gate;
+    uint8_t max_still_gate;
+    uint8_t moving[GATES]; /* energy thresholds */
+    uint8_t still[GATES];
+    uint16_t no_one_s;
+} radar_params_t;
+
 static parser_t parser;
 static portMUX_TYPE state_lock = portMUX_INITIALIZER_UNLOCKED;
 static sensor_state_t state;
@@ -64,6 +77,7 @@ static uint16_t distances[DISTANCE_WINDOW];
 static size_t distance_pos;
 static uint8_t ack_payload[MAX_FRAME]; /* last matching ACK, for commands that return data */
 static uint16_t ack_len;
+static atomic_uint restarts; /* of the radar when it went silent */
 
 static int compare_u16(const void *a, const void *b)
 {
@@ -208,63 +222,126 @@ static uint32_t scaled_threshold(uint8_t factory, uint8_t sensitivity)
     return t > 100 ? 100 : t;
 }
 
-/* Log what the radar really has, from the read-parameters ACK:
+static void wanted_params(const sensor_settings_t *s, radar_params_t *out)
+{
+    out->max_moving_gate = s->max_gate;
+    out->max_still_gate = s->max_gate;
+    out->no_one_s = NO_ONE_DURATION_S;
+    for (int g = 0; g < GATES; g++) {
+        out->moving[g] = scaled_threshold(FACTORY_MOVING[g], s->sensitivity);
+        out->still[g] = scaled_threshold(FACTORY_STILL[g], s->sensitivity);
+    }
+}
+
+static bool params_equal(const radar_params_t *a, const radar_params_t *b)
+{
+    if (a->max_moving_gate != b->max_moving_gate || a->max_still_gate != b->max_still_gate ||
+        a->no_one_s != b->no_one_s) {
+        return false;
+    }
+    for (int g = 0; g < GATES; g++) {
+        /* still thresholds of gates 0-1 cannot be set, whatever the radar reports there */
+        if (a->moving[g] != b->moving[g] || (g >= 2 && a->still[g] != b->still[g])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* From the read-parameters ACK (config mode only):
  * status(2) 0xAA, N, max moving gate, max still gate, moving[0..N], still[0..N], no-one duration(2) */
-static void log_radar_params(void)
+static bool read_radar_params(radar_params_t *out)
 {
     if (!send_command(CMD_READ_PARAMS, NULL, 0) || ack_len < 8 || ack_payload[4] != 0xAA) {
-        ESP_LOGW(TAG, "Radar parameters could not be read back");
-        return;
+        return false;
     }
     const uint8_t *p = ack_payload + 5;
     int n = p[0] + 1;
-    if (ack_len < 5 + 3 + 2 * n + 2) {
-        return;
+    if (n < GATES || ack_len < 5 + 3 + 2 * n + 2) {
+        return false;
     }
+    out->max_moving_gate = p[1];
+    out->max_still_gate = p[2];
+    memcpy(out->moving, p + 3, GATES);
+    memcpy(out->still, p + 3 + n, GATES);
+    out->no_one_s = p[3 + 2 * n] | p[4 + 2 * n] << 8;
+    return true;
+}
+
+static void log_radar_params(const radar_params_t *p)
+{
     char moving[GATES * 4 + 1] = "", still[GATES * 4 + 1] = "";
-    for (int g = 0; g < n && g < GATES; g++) {
-        snprintf(moving + strlen(moving), sizeof(moving) - strlen(moving), " %d", p[3 + g]);
-        snprintf(still + strlen(still), sizeof(still) - strlen(still), " %d", p[3 + n + g]);
+    for (int g = 0; g < GATES; g++) {
+        snprintf(moving + strlen(moving), sizeof(moving) - strlen(moving), " %d", p->moving[g]);
+        snprintf(still + strlen(still), sizeof(still) - strlen(still), " %d", p->still[g]);
     }
-    ESP_LOGI(TAG, "Radar: max gates moving %d still %d, no-one %d s", p[1], p[2],
-             p[3 + 2 * n] | p[4 + 2 * n] << 8);
+    ESP_LOGI(TAG, "Radar: max gates moving %d still %d, no-one %d s",
+             p->max_moving_gate, p->max_still_gate, p->no_one_s);
     ESP_LOGI(TAG, "Radar thresholds moving:%s", moving);
     ESP_LOGI(TAG, "Radar thresholds still: %s", still);
 }
 
-/* Stored in the radar's flash, so only sent when changed */
-static bool apply_radar_settings(const sensor_settings_t *s)
+/* Config mode only */
+static bool write_radar_params(const radar_params_t *p)
 {
-    static const uint8_t enable[] = { 0x01, 0x00 };
     uint8_t gates[18];
-    put_word_param(gates, 0x0000, s->max_gate);       /* max moving gate */
-    put_word_param(gates + 6, 0x0001, s->max_gate);   /* max still gate */
-    put_word_param(gates + 12, 0x0002, NO_ONE_DURATION_S);
-
-    if (!send_command(CMD_ENABLE_CONFIG, enable, sizeof(enable))) {
-        return false;
-    }
+    put_word_param(gates, 0x0000, p->max_moving_gate);
+    put_word_param(gates + 6, 0x0001, p->max_still_gate);
+    put_word_param(gates + 12, 0x0002, p->no_one_s);
     bool ok = send_command(CMD_SET_GATES, gates, sizeof(gates));
     for (int g = 0; ok && g < GATES; g++) {
         uint8_t sens[18];
         put_word_param(sens, 0x0000, g);
-        put_word_param(sens + 6, 0x0001, scaled_threshold(FACTORY_MOVING[g], s->sensitivity));
+        put_word_param(sens + 6, 0x0001, p->moving[g]);
         /* gates 0-1 have no settable still threshold, the radar ignores the value */
-        put_word_param(sens + 12, 0x0002, scaled_threshold(FACTORY_STILL[g], s->sensitivity));
+        put_word_param(sens + 12, 0x0002, p->still[g]);
         ok = send_command(CMD_SET_SENSITIVITY, sens, sizeof(sens));
         if (!ok) {
             ESP_LOGW(TAG, "Radar rejected thresholds of gate %d", g);
         }
     }
-    log_radar_params();
+    return ok;
+}
+
+/* Stored in the radar's flash, so only written when it holds something else. The radar sends
+ * no data in config mode, so that is kept short: reading takes 3 commands, writing 13. */
+static bool apply_radar_settings(const sensor_settings_t *s)
+{
+    radar_params_t want, have;
+    wanted_params(s, &want);
+
+    bool ok = send_command(CMD_ENABLE_CONFIG, ENABLE_CONFIG_VALUE, sizeof(ENABLE_CONFIG_VALUE));
+    if (ok) {
+        if (read_radar_params(&have) && params_equal(&have, &want)) {
+            ESP_LOGI(TAG, "Radar holds these settings already");
+        } else {
+            ok = write_radar_params(&want);
+            if (read_radar_params(&have)) {
+                log_radar_params(&have);
+            } else {
+                ESP_LOGW(TAG, "Radar parameters could not be read back");
+            }
+        }
+    }
+    /* Also when the ACK above got lost: the radar may be in config mode all the same */
     send_command(CMD_END_CONFIG, NULL, 0);
     return ok;
+}
+
+/* The radar stays in config mode, silent, until END_CONFIG, which never comes when the ESP
+ * restarts midway; a restart brings it back from that, and from whatever else it hangs in */
+static bool restart_radar(void)
+{
+    /* Its result does not matter: the radar may be in config mode already */
+    send_command(CMD_ENABLE_CONFIG, ENABLE_CONFIG_VALUE, sizeof(ENABLE_CONFIG_VALUE));
+    return send_command(CMD_RESTART, NULL, 0);
 }
 
 static void sensor_task(void *arg)
 {
     uint32_t applied = UINT32_MAX; /* push settings once after boot, then on change */
     TickType_t last_try = 0;
+    TickType_t heard = xTaskGetTickCount(); /* last seen online, or the last restart */
     bool was_online = false;
 
     for (;;) {
@@ -278,8 +355,19 @@ static void sensor_task(void *arg)
             was_online = s.online;
         }
 
-        uint32_t version = settings_radar_version();
         TickType_t now = xTaskGetTickCount();
+        if (s.online) {
+            heard = now;
+        } else if (now - heard >= pdMS_TO_TICKS(RECOVER_MS)) {
+            heard = now;
+            /* No ACK: no radar on the wires, or it hangs beyond commands; nothing to log again */
+            if (restart_radar()) {
+                atomic_fetch_add(&restarts, 1);
+                ESP_LOGW(TAG, "Radar was silent, restarted it");
+            }
+        }
+
+        uint32_t version = settings_radar_version();
         if (s.online && version != applied && now - last_try >= pdMS_TO_TICKS(APPLY_RETRY_MS)) {
             last_try = now;
             sensor_settings_t cfg;
@@ -358,4 +446,5 @@ void sensor_status_json(cJSON *out)
     cJSON_AddNumberToObject(out, "still_cm", s.still_cm);
     cJSON_AddNumberToObject(out, "moving_energy", s.moving_energy);
     cJSON_AddNumberToObject(out, "still_energy", s.still_energy);
+    cJSON_AddNumberToObject(out, "restarts", atomic_load(&restarts));
 }

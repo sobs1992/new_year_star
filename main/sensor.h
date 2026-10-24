@@ -22,7 +22,8 @@ typedef struct {
     uint8_t still_energy;
 } sensor_state_t;
 
-/* Start the task reading the radar; it also pushes gate/sensitivity settings to it */
+/* Start the task reading the radar; it also pushes gate/sensitivity settings to it and restarts
+ * it when it goes silent */
 void sensor_start(void);
 
 void sensor_get_state(sensor_state_t *out);
