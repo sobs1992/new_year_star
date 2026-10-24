@@ -992,11 +992,12 @@
     }
   }
 
-  function showPlayer(p) {
+  /* song: what the radio station is playing, if it tells */
+  function showPlayer(p, song) {
     const texts = {
       playing: 'Играет ' + p.track,
       pause: 'Пауза после ' + p.track,
-      radio: 'Радио: ' + p.track,
+      radio: 'Радио: ' + p.track + (song ? ' — ' + song : ''),
       cast: 'Трансляция: ' + p.track,
       waiting: 'Ждёт срабатывания датчика',
       stopped: 'Остановлено',
@@ -1089,7 +1090,7 @@
     clearTimeout(pollStatus.timer);
     try {
       const st = await api('/api/status');
-      showPlayer(st.player);
+      showPlayer(st.player, st.radio.title);
       showErrors(st.errors);
       showSensor(st.sensor);
       showWifi(st.wifi);

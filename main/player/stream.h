@@ -61,5 +61,5 @@ void stream_get_status(stream_status_t *out);
 size_t stream_read(uint8_t *buf, size_t len);
 
 struct cJSON;
-/* "radio" of /api/status */
+/* "radio" of /api/status; "title": the song a station is playing now, from its ICY metadata */
 void stream_status_json(struct cJSON *out);

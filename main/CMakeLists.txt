@@ -1,7 +1,7 @@
 idf_component_register(SRCS "new_year_star.c" "button.c" "led_music.c" "sensor.c" "settings.c"
                             "status.c" "storage.c" "sysinfo.c" "tracks.c"
                             # Playback: what plays and the sources it plays from
-                            "player/player.c" "player/stream.c"
+                            "player/player.c" "player/stream.c" "player/icy.c"
                             "player/dlna.c" "player/airplay.c" "player/spotify.cpp"
                             # Wi-Fi and the HTTP server with the pages and the API
                             "web/wifi.c" "web/web.c"

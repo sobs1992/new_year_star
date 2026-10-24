@@ -12,6 +12,7 @@
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "cJSON.h"
+#include "icy.h"
 #include "stream.h"
 #include "wifi.h"
 
@@ -64,7 +65,17 @@ static const struct {
 static uint8_t *ring;
 static size_t ring_head;
 static size_t ring_count;
+static uint32_t ring_taken; /* bytes read since the reset, positions the titles */
 static SemaphoreHandle_t ring_lock;
+
+/* Song title of a radio station, under ring_lock. It arrives ahead of its audio by what the
+ * ring holds (often 10-20 s), so it waits until the player reads up to it. */
+static EXT_RAM_BSS_ATTR struct {
+    char now[ICY_TITLE_SIZE];
+    char next[ICY_TITLE_SIZE];
+    uint32_t next_at; /* ring_taken where next starts */
+    bool pending;
+} title;
 
 static SemaphoreHandle_t req_lock;
 static char wanted_url[STREAM_URL_SIZE];
@@ -82,6 +93,7 @@ static struct {
     char content_type[64];
     bool accept_ranges;
     uint32_t range_total; /* from Content-Range: bytes a-b/total */
+    uint32_t metaint;     /* ICY metadata interval, 0: none */
 } resp;
 
 static esp_err_t http_event(esp_http_client_event_t *evt)
@@ -97,6 +109,8 @@ static esp_err_t http_event(esp_http_client_event_t *evt)
         const char *slash = strchr(evt->header_value, '/');
         resp.range_total = slash ? strtoul(slash + 1, NULL, 10) : 0;
         resp.accept_ranges = true;
+    } else if (strcasecmp(evt->header_key, "icy-metaint") == 0) {
+        resp.metaint = strtoul(evt->header_value, NULL, 10);
     }
     return ESP_OK;
 }
@@ -133,6 +147,11 @@ size_t stream_read(uint8_t *buf, size_t len)
     memcpy(buf + first, ring, n - first);
     ring_head = (ring_head + n) % RING_SIZE;
     ring_count -= n;
+    ring_taken += n;
+    if (title.pending && (int32_t)(ring_taken - title.next_at) >= 0) {
+        strlcpy(title.now, title.next, sizeof(title.now));
+        title.pending = false;
+    }
     xSemaphoreGive(ring_lock);
     return n;
 }
@@ -142,6 +161,20 @@ static void ring_reset(void)
     xSemaphoreTake(ring_lock, portMAX_DELAY);
     ring_head = 0;
     ring_count = 0;
+    ring_taken = 0;
+    title.now[0] = '\0';
+    title.pending = false;
+    xSemaphoreGive(ring_lock);
+}
+
+/* From icy_strip(), before the buffer it parses goes into the ring. A title still waiting is
+ * replaced: two changes within the buffered seconds show only the later one. */
+static void title_received(const char *text, size_t audio_before)
+{
+    xSemaphoreTake(ring_lock, portMAX_DELAY);
+    strlcpy(title.next, text, sizeof(title.next));
+    title.next_at = ring_taken + ring_count + audio_before; /* all audio put into the ring so far */
+    title.pending = true;
     xSemaphoreGive(ring_lock);
 }
 
@@ -221,12 +254,13 @@ static bool detect_codec(const char *mime, const char *url, stream_codec_t *out)
 
 /* Connect, follow redirects and playlists, then pump the stream into the ring until the
  * request changes (returns NULL), the file ends (returns NULL, *ended) or something fails
- * (returns the reason) */
-static const char *receive(const char *start_url, const char *mime_hint, uint32_t offset, uint32_t gen,
-                           bool *ended)
+ * (returns the reason). A live stream is asked for its song titles. */
+static const char *receive(const char *start_url, const char *mime_hint, bool live, uint32_t offset,
+                           uint32_t gen, bool *ended)
 {
     static char url[STREAM_URL_SIZE];
     static char error[96];
+    static EXT_RAM_BSS_ATTR icy_t icy;
     strlcpy(url, start_url, sizeof(url));
 
     for (int hop = 0; hop < MAX_PLAYLIST_HOPS; hop++) {
@@ -247,6 +281,9 @@ static const char *receive(const char *start_url, const char *mime_hint, uint32_
             char range[32];
             snprintf(range, sizeof(range), "bytes=%" PRIu32 "-", offset);
             esp_http_client_set_header(client, "Range", range);
+        }
+        if (live) {
+            esp_http_client_set_header(client, "Icy-MetaData", "1");
         }
 
         int code = 0;
@@ -321,6 +358,7 @@ static const char *receive(const char *start_url, const char *mime_hint, uint32_
         status.content_length = total;
         status.seekable = resp.accept_ranges && total > 0;
         xSemaphoreGive(req_lock);
+        icy_init(&icy, resp.metaint);
         fail = NULL;
         while (!changed(gen)) {
             int n = esp_http_client_read(client, (char *)rx_buf, sizeof(rx_buf));
@@ -332,6 +370,7 @@ static const char *receive(const char *start_url, const char *mime_hint, uint32_
                 fail = "Поток прервался";
                 break;
             }
+            n = (int)icy_strip(&icy, rx_buf, n, title_received);
             /* Ring full: wait for the player, the stream is real-time anyway */
             for (int off = 0; off < n && !changed(gen);) {
                 off += ring_write(rx_buf + off, n - off);
@@ -386,7 +425,7 @@ static void stream_task(void *arg)
             }
             set_status(gen, STREAM_CONNECTING, STREAM_CODEC_MP3, NULL);
             bool ended = false;
-            const char *error = receive(url, mime, offset, gen, &ended);
+            const char *error = receive(url, mime, live, offset, gen, &ended);
             if (changed(gen)) {
                 break;
             }
@@ -479,4 +518,9 @@ void stream_status_json(cJSON *out)
     cJSON_AddNumberToObject(out, "buffered", st.buffered);
     cJSON_AddNumberToObject(out, "buffer_size", st.buffer_size);
     cJSON_AddStringToObject(out, "error", st.error);
+    char song[ICY_TITLE_SIZE];
+    xSemaphoreTake(ring_lock, portMAX_DELAY);
+    strlcpy(song, title.now, sizeof(song));
+    xSemaphoreGive(ring_lock);
+    cJSON_AddStringToObject(out, "title", song);
 }

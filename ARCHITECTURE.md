@@ -33,6 +33,7 @@ All application code is in `main/`: playback in `main/player/`, Wi-Fi and the HT
 | `tracks` | Uploading and deleting track files (file + entry in the settings) |
 | `player/player` | Decides what plays and plays it: decoders, volume, I2S output |
 | `player/stream` | HTTP(S) download of a stream or file into a PSRAM ring (radio and DLNA); the formats |
+| `player/icy` | ICY metadata of a radio stream: taken out of the audio, the song title; host-tested |
 | `player/dlna` | UPnP media renderer: SSDP, SOAP control, GENA events |
 | `player/airplay` | AirPlay 1 (RAOP) receiver: RTSP, RTP, ALAC, jitter buffer |
 | `player/spotify` | Spotify Connect over cspot: zeroconf login, decoded audio ring |
@@ -72,6 +73,10 @@ Spotify (cspot decoder, ring) ────────────────�
 block; `led_music` turns them into brightness and color 100 times a second (auto gain,
 attack / release). The strip is driven over SPI with DMA: the C5's RMT has no DMA, and Wi-Fi
 interrupts corrupt its WS2812 timing.
+
+A radio station's song title comes inside the stream (ICY metadata, `icy.c`): `stream.c` takes
+it out before the ring and shows it (`radio.title` in `/api/status`) only once the player has
+read up to where it arrived, since the ring holds the next 10-20 s.
 
 ## Settings
 

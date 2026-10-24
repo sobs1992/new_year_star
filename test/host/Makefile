@@ -16,7 +16,7 @@ INCLUDE := -I. -Istubs -I$(MAIN) -I$(CJSON)
 # The track directory STORAGE_BASE_PATH is faked in stubs.c
 WRAP    := -Wl,--wrap=opendir,--wrap=readdir,--wrap=closedir,--wrap=stat
 
-TESTS   := test_settings
+TESTS   := test_settings test_icy
 
 .PHONY: all clean
 all: $(addprefix run-,$(TESTS))
@@ -32,6 +32,9 @@ $(BUILD)/test_settings: test_settings.c $(MAIN)/settings.c $(MAIN)/storage.c stu
                         $(wildcard stubs/*.h stubs/*/*.h) test.h $(MAIN)/settings.h $(MAIN)/storage.h | $(BUILD)
 	$(CC) $(CFLAGS) $(INCLUDE) $(WRAP) -o $@ test_settings.c $(MAIN)/settings.c $(MAIN)/storage.c \
 	      stubs/stubs.c $(BUILD)/cJSON.o -lm
+
+$(BUILD)/test_icy: test_icy.c $(MAIN)/player/icy.c $(MAIN)/player/icy.h test.h | $(BUILD)
+	$(CC) $(CFLAGS) -I. -I$(MAIN)/player -o $@ test_icy.c $(MAIN)/player/icy.c
 
 $(BUILD):
 	@test -f $(CJSON)/cJSON.c || { echo "cJSON not found: run idf.py reconfigure once"; exit 1; }
