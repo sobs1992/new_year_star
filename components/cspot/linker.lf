@@ -1,0 +1,11 @@
+# Locale and iostream state of libstdc++ (bell's HTTP client is stream based) and cspot's own
+# statics go to PSRAM: internal RAM is short. Needs CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY.
+[mapping:cspot]
+archive: libcspot.a
+entries:
+    * (extram_bss)
+
+[mapping:cspot_libstdcxx]
+archive: libstdc++.a
+entries:
+    * (extram_bss)

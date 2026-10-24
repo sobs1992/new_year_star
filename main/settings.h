@@ -74,10 +74,15 @@ typedef struct {
     uint16_t sensor_minutes; /* how long to play after a sensor trigger */
 } radio_settings_t;
 
+#define SPOTIFY_KEY_SIZE 33 /* Client ID / Secret: 32 hex digits */
+
 /* Casting from phones */
 typedef struct {
     bool dlna;    /* DLNA / UPnP media renderer, mostly Android */
     bool airplay; /* AirPlay 1, iPhone / Mac */
+    bool spotify; /* Spotify Connect: Premium account, plus a developer app's keys below */
+    char spotify_client_id[SPOTIFY_KEY_SIZE];     /* empty when not set */
+    char spotify_client_secret[SPOTIFY_KEY_SIZE]; /* never sent to the web page */
 } cast_settings_t;
 
 /* Scan the MP3 files in storage, then load settings from NVS or fall back to defaults.

@@ -18,3 +18,19 @@ CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
 CONFIG_HTTPD_MAX_REQ_HDR_LEN=2048
 # Internal RAM is tight with Wi-Fi + TLS + DLNA + AirPlay: only small allocations stay internal
 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
+# Spotify Connect (cspot) is C++ and reports network errors with exceptions
+CONFIG_COMPILER_CXX_EXCEPTIONS=y
+# Decoders the player uses: MP3, AAC, FLAC, WAV (PCM / ADPCM), M4A (AAC / ALAC), ALAC for
+# AirPlay. The rest only took flash space (Spotify brings its own Vorbis decoder).
+# CONFIG_AUDIO_DECODER_G711_SUPPORT is not set
+# CONFIG_AUDIO_DECODER_AMRNB_SUPPORT is not set
+# CONFIG_AUDIO_DECODER_AMRWB_SUPPORT is not set
+# CONFIG_AUDIO_DECODER_OPUS_SUPPORT is not set
+# CONFIG_AUDIO_DECODER_VORBIS_SUPPORT is not set
+# CONFIG_AUDIO_DECODER_SBC_SUPPORT is not set
+# CONFIG_AUDIO_DECODER_LC3_SUPPORT is not set
+# CONFIG_AUDIO_DECODER_G722_SUPPORT is not set
+# CONFIG_AUDIO_SIMPLE_DEC_TS_SUPPORT is not set
+# CONFIG_AUDIO_SIMPLE_DEC_OGG_SUPPORT is not set
+# .bss of Wi-Fi, lwip, libstdc++ and cspot in PSRAM: frees ~25 KB of internal RAM for DMA
+CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y

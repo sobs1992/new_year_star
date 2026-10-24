@@ -1,3 +1,4 @@
+#include <ctype.h>
 #include <dirent.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -189,6 +190,38 @@ static bool read_bool(const cJSON *obj, const char *key, bool *out, char *err, s
     }
     *out = cJSON_IsTrue(item);
     return true;
+}
+
+/* Optional Spotify app key: absent keeps the current one, otherwise empty or 32 hex digits */
+static bool read_spotify_key(const cJSON *obj, const char *key, char out[SPOTIFY_KEY_SIZE],
+                             char *err, size_t err_len)
+{
+    const cJSON *item = cJSON_GetObjectItemCaseSensitive(obj, key);
+    if (item == NULL) {
+        return true;
+    }
+    const char *v = cJSON_GetStringValue(item);
+    bool ok = v && (v[0] == '\0' || strlen(v) == SPOTIFY_KEY_SIZE - 1);
+    for (const char *c = v; ok && *c; c++) {
+        ok = isxdigit((unsigned char)*c);
+    }
+    if (!ok) {
+        snprintf(err, err_len, "%s: expected 32 hex digits or empty", key);
+        return false;
+    }
+    strlcpy(out, v, SPOTIFY_KEY_SIZE);
+    return true;
+}
+
+static bool parse_cast(const cJSON *jc, cast_settings_t *c, char *err, size_t err_len)
+{
+    /* "spotify" and the keys came later than the rest */
+    const cJSON *jspotify = cJSON_GetObjectItemCaseSensitive(jc, "spotify");
+    return read_bool(jc, "dlna", &c->dlna, err, err_len) &&
+           read_bool(jc, "airplay", &c->airplay, err, err_len) &&
+           (jspotify == NULL || read_bool(jc, "spotify", &c->spotify, err, err_len)) &&
+           read_spotify_key(jc, "spotify_client_id", c->spotify_client_id, err, err_len) &&
+           read_spotify_key(jc, "spotify_client_secret", c->spotify_client_secret, err, err_len);
 }
 
 /* Index of the string obj[key] in names, -1 if absent or not a string */
@@ -402,8 +435,7 @@ static bool parse(const char *json, all_settings_t *s, char *err, size_t err_len
     if (jradio && !parse_radio(jradio, &s->radio, err, err_len)) {
         goto out;
     }
-    if (jcast && (!read_bool(jcast, "dlna", &s->cast.dlna, err, err_len) ||
-                  !read_bool(jcast, "airplay", &s->cast.airplay, err, err_len))) {
+    if (jcast && !parse_cast(jcast, &s->cast, err, err_len)) {
         goto out;
     }
     if (jmode) {
@@ -520,7 +552,7 @@ void settings_init(void)
     cur.sensor[PLAYER_MODE_RADIO] = SENSOR_DEFAULTS;
     cur.mode = PLAYER_MODE_PLAYLIST;
     cur.radio = RADIO_DEFAULTS;
-    cur.cast = (cast_settings_t){ .dlna = true, .airplay = true };
+    cur.cast = (cast_settings_t){ .dlna = true, .airplay = true, .spotify = true };
     memcpy(cur.radio.stations, STATION_PRESETS, sizeof(STATION_PRESETS));
     for (size_t i = 0; i < cur.track_count; i++) {
         ESP_LOGI(TAG, "Track: %s, %u bytes", cur.tracks[i].name,
@@ -761,6 +793,14 @@ char *settings_to_json(bool for_ui)
     cJSON *jcast = cJSON_AddObjectToObject(root, "cast");
     cJSON_AddBoolToObject(jcast, "dlna", cur.cast.dlna);
     cJSON_AddBoolToObject(jcast, "airplay", cur.cast.airplay);
+    cJSON_AddBoolToObject(jcast, "spotify", cur.cast.spotify);
+    cJSON_AddStringToObject(jcast, "spotify_client_id", cur.cast.spotify_client_id);
+    if (for_ui) {
+        /* The page only learns whether it is there; it sends a new one to replace it */
+        cJSON_AddBoolToObject(jcast, "spotify_secret_set", cur.cast.spotify_client_secret[0] != '\0');
+    } else {
+        cJSON_AddStringToObject(jcast, "spotify_client_secret", cur.cast.spotify_client_secret);
+    }
     xSemaphoreGive(lock);
 
     if (for_ui) {

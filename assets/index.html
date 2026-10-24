@@ -155,6 +155,11 @@
   .dot.on { background: var(--accent); }
   .dot.idle { background: var(--ok); }
   h3 { font-size: 15px; margin: 18px 0 8px; padding-top: 14px; border-top: 1px solid var(--line); }
+  .howto { font-size: 13px; color: var(--muted); margin-top: 10px; }
+  .howto summary { cursor: pointer; color: var(--text); }
+  .howto ol { margin: 8px 0 0; padding-left: 20px; }
+  .howto li + li { margin-top: 4px; }
+  .howto a, .howto code { color: var(--text); overflow-wrap: anywhere; }
 
   #status {
     position: fixed;
@@ -245,7 +250,7 @@
 
   <section>
     <h2>Трансляция с телефона</h2>
-    <p class="hint">Телефон должен быть в той же сети, что и звезда: в домашней или в сети звезды. Пока идёт трансляция, плейлист и радио молчат, а после неё продолжают.</p>
+    <p class="hint">Телефон должен быть в той же сети, что и звезда: в домашней или в сети звезды. Пока идёт трансляция, плейлист и радио молчат, а после неё продолжают (Spotify — и через 2 минуты паузы).</p>
     <div id="cast"></div>
   </section>
 
@@ -816,6 +821,106 @@
       'В приложении-пульте (BubbleUPnP, Hi-Fi Cast и т. п.) выберите устройство «Новогодняя звезда». Форматы: MP3, AAC, FLAC, WAV');
     item('airplay', 'AirPlay — iPhone, iPad, Mac',
       'Пункт управления → значок AirPlay → «Новогодняя звезда». Работает с любым приложением, где есть AirPlay');
+    renderSpotify(root, cast);
+  }
+
+  const SPOTIFY_KEY = /^[0-9a-fA-F]{32}$/;
+
+  function renderSpotify(root, cast) {
+    root.append(el('div', { className: 'setting' },
+      checkbox('Spotify Connect — приложение Spotify', cast.spotify, on => {
+        cast.spotify = on;
+        renderCast();
+        scheduleSave();
+      }),
+      el('small', { textContent: 'Нужен Spotify Premium и интернет у звезды (домашняя сеть). ' +
+        'В приложении: значок устройств внизу экрана → «Новогодняя звезда»' })));
+    if (!cast.spotify) {
+      return;
+    }
+    root.append(el('div', { className: 'live' },
+      el('span', { className: 'dot', id: 'spotify-dot' }), el('span', { id: 'spotify-live', textContent: '—' })));
+
+    /* The secret never comes back from the star: the field stays empty, a new value replaces it */
+    const keyField = (label, key, secret) => {
+      const box = el('input', { type: secret ? 'password' : 'text', maxLength: 32, spellcheck: false,
+        autocomplete: 'off', autocapitalize: 'off' });
+      if (secret) {
+        box.placeholder = cast.spotify_secret_set ? 'сохранён; введите новый, чтобы заменить' : '32 символа';
+      } else {
+        box.value = cast[key];
+        box.placeholder = '32 символа';
+      }
+      box.addEventListener('change', () => {
+        const v = box.value.trim();
+        if (v && !SPOTIFY_KEY.test(v)) {
+          showStatus(label + ': нужно 32 символа, цифры и буквы a–f', 'error', true);
+          return;
+        }
+        cast[key] = v;
+        if (secret) {
+          cast.spotify_secret_set = v !== '';
+          box.value = '';
+          box.placeholder = v ? 'сохранён; введите новый, чтобы заменить' : '32 символа';
+        }
+        scheduleSave();
+      });
+      return el('div', { className: 'setting' }, el('label', { className: 'field' }, label, box));
+    };
+    root.append(keyField('Client ID', 'spotify_client_id', false),
+      keyField('Client Secret', 'spotify_client_secret', true));
+
+    const link = el('a', { href: 'https://developer.spotify.com/dashboard', target: '_blank', rel: 'noopener',
+      textContent: 'developer.spotify.com/dashboard' });
+    root.append(el('details', { className: 'howto' },
+      el('summary', { textContent: 'Где взять Client ID и Client Secret' }),
+      el('ol', {},
+        el('li', {}, 'Откройте ', link, ' и войдите своим аккаунтом Spotify (Premium). ' +
+          'Если приложение там уже есть, возьмите ключи у него: Spotify разрешает только одно.'),
+        el('li', {}, 'Create app: любое название и описание, Redirect URI — ',
+          el('code', { textContent: 'http://127.0.0.1:8888/callback' }),
+          ' (поле обязательное, звезда его не использует), отметьте Web API, сохраните.'),
+        el('li', { textContent: 'В Settings приложения скопируйте сюда Client ID, затем нажмите ' +
+          'View client secret и скопируйте Client Secret.' }),
+        el('li', { textContent: 'Нажмите на значок устройств в приложении Spotify и выберите «Новогодняя звезда». ' +
+          'Звезда входит в тот аккаунт, с которого её выбрали.' }))));
+  }
+
+  function showSpotify(sp) {
+    if (!document.getElementById('spotify-live')) {
+      return; /* switched off */
+    }
+    const track = [sp.artist, sp.title].filter(Boolean).join(' — ');
+    let text, dot;
+    switch (sp.state) {
+      case 'no_keys':
+        [text, dot] = ['Введите Client ID и Client Secret: без них звезду не видно в Spotify', 'on'];
+        break;
+      case 'waiting':
+        [text, dot] = sp.login_failed
+          ? ['Не удалось войти в аккаунт Spotify (нужен Premium и интернет). Выберите звезду в приложении ещё раз', 'on']
+          : ['Ждёт: выберите «Новогодняя звезда» в приложении Spotify', 'idle'];
+        break;
+      case 'connecting':
+        [text, dot] = ['Вход в аккаунт ' + sp.user + '…', 'on'];
+        break;
+      case 'playing':
+        [text, dot] = ['Играет' + (track ? ': ' + track : '') + ' (' + sp.user + ')', 'idle'];
+        break;
+      case 'paused':
+        [text, dot] = ['Пауза' + (track ? ': ' + track : '') + ' (' + sp.user + ')', 'idle'];
+        break;
+      case 'connected':
+        [text, dot] = ['Подключено к аккаунту ' + sp.user, 'idle'];
+        break;
+      default:
+        [text, dot] = ['Выключено', ''];
+    }
+    if (sp.key_failed && sp.state !== 'no_keys') {
+      text += '. Spotify не принял Client ID / Client Secret — треки не загрузятся';
+      dot = 'on';
+    }
+    setLive('spotify', text, dot);
   }
 
   /* ---------- saving ---------- */
@@ -973,6 +1078,7 @@
       showSensor(st.sensor);
       showWifi(st.wifi);
       showRadio(st.radio);
+      showSpotify(st.spotify);
     } catch (e) {
       document.getElementById('now').textContent = 'Нет связи со звездой';
     }

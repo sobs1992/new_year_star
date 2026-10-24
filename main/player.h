@@ -10,7 +10,7 @@ typedef enum {
     PLAYER_PAUSE,   /* pause after a track */
     PLAYER_RADIO,   /* track holds the station name */
     PLAYER_STOPPED, /* by the stop button */
-    PLAYER_CAST,    /* a phone casts (DLNA / AirPlay); track holds what */
+    PLAYER_CAST,    /* a phone casts (DLNA / AirPlay / Spotify); track holds what */
 } player_status_t;
 
 /* Start the task that plays the enabled tracks or the radio: continuously, or per sensor trigger */

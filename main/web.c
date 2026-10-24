@@ -11,6 +11,7 @@
 #include "cJSON.h"
 #include "airplay.h"
 #include "dlna.h"
+#include "spotify.h"
 #include "dns_server.h"
 #include "player.h"
 #include "radio.h"
@@ -215,6 +216,26 @@ static esp_err_t status_get(httpd_req_t *req)
     cJSON_AddNumberToObject(jair, "played", as.played);
     cJSON_AddNumberToObject(jair, "lost", as.lost);
     cJSON_AddNumberToObject(jair, "volume", airplay_volume());
+
+    static const char *const SPOTIFY_STATES[] = {
+        [SPOTIFY_OFF] = "off",
+        [SPOTIFY_NO_KEYS] = "no_keys",
+        [SPOTIFY_WAITING] = "waiting",
+        [SPOTIFY_CONNECTING] = "connecting",
+        [SPOTIFY_CONNECTED] = "connected",
+        [SPOTIFY_PLAYING] = "playing",
+        [SPOTIFY_PAUSED] = "paused",
+    };
+    static spotify_status_t sp; /* only the httpd task gets here */
+    spotify_get_status(&sp);
+    cJSON *jsp = cJSON_AddObjectToObject(root, "spotify");
+    cJSON_AddStringToObject(jsp, "state", SPOTIFY_STATES[sp.state]);
+    cJSON_AddBoolToObject(jsp, "login_failed", sp.login_failed);
+    cJSON_AddBoolToObject(jsp, "key_failed", sp.key_failed);
+    cJSON_AddStringToObject(jsp, "user", sp.user);
+    cJSON_AddStringToObject(jsp, "title", sp.title);
+    cJSON_AddStringToObject(jsp, "artist", sp.artist);
+    cJSON_AddNumberToObject(jsp, "volume", spotify_volume());
 
     cJSON *jheap = cJSON_AddObjectToObject(root, "heap");
     cJSON_AddNumberToObject(jheap, "internal_free", heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
@@ -467,7 +488,7 @@ static httpd_handle_t http_start(void)
 {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.max_open_sockets = 16;
-    cfg.max_uri_handlers = 20;
+    cfg.max_uri_handlers = 24; /* 10 here, DLNA 4, Spotify 2 */
     cfg.uri_match_fn = httpd_uri_match_wildcard; /* /dlna/... handlers */
     cfg.stack_size = 6144;
     cfg.lru_purge_enable = true;
@@ -504,6 +525,7 @@ void web_start(void)
     httpd_handle_t server = http_start();
     dlna_start(server);
     airplay_start();
+    spotify_start(server);
 
     /* Answer every DNS query with our IP, so any site opens the portal */
     dns_server_config_t dns_cfg = DNS_SERVER_CONFIG_SINGLE("*", "WIFI_AP_DEF");

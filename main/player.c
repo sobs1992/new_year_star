@@ -20,6 +20,7 @@
 #include "radio.h"
 #include "sensor.h"
 #include "settings.h"
+#include "spotify.h"
 #include "storage.h"
 
 /* MAX98357 wiring (XIAO ESP32-C5) */
@@ -301,10 +302,10 @@ static esp_audio_simple_dec_type_t decoder_type(radio_codec_t codec)
     }
 }
 
-/* A phone casting (DLNA / AirPlay) takes over from the playlist, the radio and the sensor */
+/* A phone casting (DLNA / AirPlay / Spotify) takes over from the playlist, the radio and the sensor */
 static bool cast_active(void)
 {
-    return airplay_active() || dlna_session_open();
+    return airplay_active() || spotify_active() || dlna_session_open();
 }
 
 /* ---- Playlist: MP3 files from storage ---- */
@@ -517,7 +518,7 @@ typedef struct {
 static bool dlna_current(const dlna_source_t *ds, bool *paused)
 {
     static dlna_job_t now; /* holds a long URL; only the player task calls this */
-    if (airplay_active() || !dlna_get_job(&now) || now.generation != ds->job.generation) {
+    if (airplay_active() || spotify_active() || !dlna_get_job(&now) || now.generation != ds->job.generation) {
         return false;
     }
     if (paused) {
@@ -628,6 +629,61 @@ static void play_airplay(void)
     led_music_set_levels(0, 0, 0, 0);
 }
 
+/* Cut a string snprintf truncated back to whole UTF-8 characters */
+static void utf8_trim(char *s)
+{
+    size_t n = strlen(s);
+    size_t start = n;
+    while (start > 0 && ((unsigned char)s[start - 1] & 0xC0) == 0x80) {
+        start--; /* continuation bytes of the last character */
+    }
+    if (start > 0) {
+        unsigned char lead = s[start - 1];
+        size_t len = lead >= 0xF0 ? 4 : lead >= 0xE0 ? 3 : lead >= 0xC0 ? 2 : 1;
+        if (n - (start - 1) < len) {
+            s[start - 1] = '\0';
+        }
+    }
+}
+
+static void play_spotify(void)
+{
+    static int16_t *pcm; /* 1024 stereo frames, in PSRAM: internal RAM is short */
+    static spotify_status_t st;
+    if (pcm == NULL) {
+        pcm = heap_caps_malloc(1024 * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM);
+        if (pcm == NULL) {
+            return;
+        }
+    }
+    char shown[TRACK_NAME_SIZE] = "";
+    int64_t next_info = 0;
+    ESP_LOGI(TAG, "Spotify");
+    i2s_start(44100);
+    /* AirPlay wins when a phone starts it meanwhile */
+    while (spotify_active() && !airplay_active()) {
+        int64_t now = esp_timer_get_time();
+        if (now >= next_info) {
+            next_info = now + 500000;
+            spotify_get_status(&st);
+            char track[TRACK_NAME_SIZE];
+            snprintf(track, sizeof(track), st.title[0] ? "Spotify: %s" : "Spotify", st.title);
+            utf8_trim(track);
+            if (strcmp(track, shown) != 0) {
+                strlcpy(shown, track, sizeof(shown));
+                set_status(PLAYER_CAST, shown);
+            }
+        }
+        size_t frames = spotify_read(pcm, 1024, 100);
+        if (frames) {
+            play_pcm(pcm, frames * 2 * sizeof(int16_t), cast_gain(spotify_volume()), 2);
+        } else {
+            led_music_set_levels(0, 0, 0, 0); /* paused in the app or buffering: let the light fade */
+        }
+    }
+    led_music_set_levels(0, 0, 0, 0);
+}
+
 /* Play whatever phones cast until they stop; true if anything was cast */
 static bool play_cast(void)
 {
@@ -636,6 +692,8 @@ static bool play_cast(void)
         played = true;
         if (airplay_active()) {
             play_airplay();
+        } else if (spotify_active()) {
+            play_spotify();
         } else if (dlna_get_job(NULL)) {
             play_dlna();
         } else {
@@ -751,6 +809,7 @@ void player_stop(void)
     atomic_store(&running, false);
     dlna_stop();
     airplay_stop();
+    spotify_stop();
 }
 
 void player_start(void)
