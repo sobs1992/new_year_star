@@ -36,6 +36,8 @@
 #define RADIO_RETRY_MS  2000
 #define BASS_HZ         250  /* light music bands: bass below, treble above TREBLE_HZ */
 #define TREBLE_HZ       2500
+#define CAST_FRAMES     1024 /* PCM frames read from a receiver at once (AirPlay gives 352) */
+#define ARRAY_SIZE(a)   (sizeof(a) / sizeof((a)[0]))
 
 static const char *TAG = "player";
 
@@ -303,10 +305,86 @@ static esp_audio_simple_dec_type_t decoder_type(radio_codec_t codec)
     }
 }
 
-/* A phone casting (DLNA / AirPlay / Spotify) takes over from the playlist, the radio and the sensor */
-static bool cast_active(void)
+/* ---- Who gets the speaker ---- */
+
+typedef enum {
+    SOURCE_NONE, /* stopped by the button */
+    SOURCE_AIRPLAY,
+    SOURCE_SPOTIFY,
+    SOURCE_DLNA,
+    SOURCE_PLAYLIST,
+    SOURCE_RADIO,
+} source_t;
+
+/* A receiver phones cast to */
+typedef struct cast cast_t;
+struct cast {
+    source_t source;
+    const char *name;
+    bool (*active)(void);          /* wants the speaker */
+    void (*stop)(void);            /* stop button: end the session now */
+    void (*play)(const cast_t *c); /* returns when another source gets the speaker */
+    /* Receivers that decode by themselves (play_pcm_cast): 16-bit stereo PCM at 44.1 kHz */
+    size_t (*read)(int16_t *pcm, size_t max_frames, int timeout_ms);
+    uint8_t (*volume)(void);                  /* 0..100, set by the phone */
+    void (*describe)(char *out, size_t size); /* what plays, for the status; NULL: the name */
+};
+
+static void play_pcm_cast(const cast_t *c);
+static void play_dlna_session(const cast_t *c);
+static void spotify_describe(char *out, size_t size);
+
+/* By priority: a phone starting AirPlay takes over from Spotify, Spotify from DLNA */
+static const cast_t CASTS[] = {
+    { .source = SOURCE_AIRPLAY, .name = "AirPlay", .active = airplay_active, .stop = airplay_stop,
+      .play = play_pcm_cast, .read = airplay_read, .volume = airplay_volume },
+    { .source = SOURCE_SPOTIFY, .name = "Spotify", .active = spotify_active, .stop = spotify_stop,
+      .play = play_pcm_cast, .read = spotify_read, .volume = spotify_volume, .describe = spotify_describe },
+    /* An open session holds the speaker between the phone's tracks too */
+    { .source = SOURCE_DLNA, .name = "DLNA", .active = dlna_session_open, .stop = dlna_stop,
+      .play = play_dlna_session },
+};
+
+/* The one place that decides what plays: a phone casting, else the star's own mode unless
+ * stopped. A cast started after the stop button plays all the same: the button ends the casts
+ * of the moment (player_stop). When the own mode starts is up to the sensor (wait_for_trigger).
+ * Every playback loop asks before each frame and ends once its source is not wanted. */
+static source_t wanted_source(void)
 {
-    return airplay_active() || spotify_active() || dlna_session_open();
+    for (size_t i = 0; i < ARRAY_SIZE(CASTS); i++) {
+        if (CASTS[i].active()) {
+            return CASTS[i].source;
+        }
+    }
+    if (!running) {
+        return SOURCE_NONE;
+    }
+    return settings_get_mode() == PLAYER_MODE_RADIO ? SOURCE_RADIO : SOURCE_PLAYLIST;
+}
+
+/* NULL when the source is not a cast */
+static const cast_t *cast_of(source_t source)
+{
+    for (size_t i = 0; i < ARRAY_SIZE(CASTS); i++) {
+        if (CASTS[i].source == source) {
+            return &CASTS[i];
+        }
+    }
+    return NULL;
+}
+
+/* vTaskDelay that ends early when the source loses the speaker */
+static void pause_while(uint32_t ms, source_t source)
+{
+    for (uint32_t waited = 0; waited < ms && wanted_source() == source; waited += TRIGGER_POLL_MS) {
+        vTaskDelay(pdMS_TO_TICKS(ms - waited < TRIGGER_POLL_MS ? ms - waited : TRIGGER_POLL_MS));
+    }
+}
+
+/* 0: no deadline */
+static bool deadline_passed(TickType_t deadline)
+{
+    return deadline && (int32_t)(xTaskGetTickCount() - deadline) >= 0;
 }
 
 /* ---- Playlist: MP3 files from storage ---- */
@@ -327,8 +405,8 @@ static size_t file_read(audio_source_t *src, uint8_t *buf, size_t len)
 static int file_volume(audio_source_t *src)
 {
     track_settings_t ts;
-    if (!running || cast_active() || settings_get_mode() != PLAYER_MODE_PLAYLIST ||
-        !settings_find_track(((file_source_t *)src)->name, &ts) || !ts.enabled) {
+    if (wanted_source() != SOURCE_PLAYLIST || !settings_find_track(((file_source_t *)src)->name, &ts) ||
+        !ts.enabled) {
         return -1;
     }
     return ts.volume;
@@ -351,19 +429,6 @@ static void play_track(const char *name)
     fclose(src.file);
 }
 
-static bool playlist_keep_playing(void)
-{
-    return running && !cast_active() && settings_get_mode() == PLAYER_MODE_PLAYLIST;
-}
-
-/* vTaskDelay that ends early when keep_playing() turns false */
-static void pause_while(uint32_t ms, bool (*keep_playing)(void))
-{
-    for (uint32_t waited = 0; waited < ms && keep_playing(); waited += TRIGGER_POLL_MS) {
-        vTaskDelay(pdMS_TO_TICKS(ms - waited < TRIGGER_POLL_MS ? ms - waited : TRIGGER_POLL_MS));
-    }
-}
-
 /* One pass over the enabled tracks; false if none is enabled */
 static bool play_cycle(void)
 {
@@ -372,7 +437,7 @@ static bool play_cycle(void)
     track_settings_t ts;
     /* By index: tracks may be uploaded or deleted meanwhile, a skipped or repeated one is fine */
     for (size_t i = 0; settings_get_track(i, name, &ts); i++) {
-        if (!playlist_keep_playing()) {
+        if (wanted_source() != SOURCE_PLAYLIST) {
             break;
         }
         if (!ts.enabled) {
@@ -385,13 +450,13 @@ static bool play_cycle(void)
         /* Re-read after each repeat: settings may change while playing */
         for (int r = 0; r < ts.repeat && ts.enabled; r++) {
             play_track(name);
-            if (!settings_find_track(name, &ts) || !playlist_keep_playing()) {
+            if (!settings_find_track(name, &ts) || wanted_source() != SOURCE_PLAYLIST) {
                 break;
             }
         }
-        if (playlist_keep_playing()) {
+        if (wanted_source() == SOURCE_PLAYLIST) {
             set_status(PLAYER_PAUSE, name);
-            pause_while(ts.pause_ms, playlist_keep_playing);
+            pause_while(ts.pause_ms, SOURCE_PLAYLIST);
         }
     }
     return played;
@@ -407,17 +472,10 @@ typedef struct {
     bool buffering;
 } radio_source_t;
 
-static bool radio_mode_on(void)
-{
-    return running && !cast_active() && settings_get_mode() == PLAYER_MODE_RADIO;
-}
-
 static bool radio_keep_playing(radio_source_t *rs)
 {
-    if (!radio_mode_on() || radio_generation() != rs->generation) {
-        return false;
-    }
-    if (rs->deadline && (int32_t)(xTaskGetTickCount() - rs->deadline) >= 0) {
+    if (wanted_source() != SOURCE_RADIO || radio_generation() != rs->generation ||
+        deadline_passed(rs->deadline)) {
         return false;
     }
     radio_station_t station;
@@ -456,12 +514,12 @@ static int radio_source_volume(audio_source_t *src)
  * Station changes and broken streams are handled here by reconnecting. */
 static void play_radio(TickType_t deadline)
 {
-    while (radio_mode_on() && !(deadline && (int32_t)(xTaskGetTickCount() - deadline) >= 0)) {
+    while (wanted_source() == SOURCE_RADIO && !deadline_passed(deadline)) {
         radio_station_t station;
         if (!settings_get_current_station(&station)) {
             radio_stop();
             set_status(PLAYER_IDLE, NULL);
-            pause_while(IDLE_POLL_MS, radio_mode_on);
+            pause_while(IDLE_POLL_MS, SOURCE_RADIO);
             continue;
         }
 
@@ -493,7 +551,7 @@ static void play_radio(TickType_t deadline)
             ESP_LOGW(TAG, "%s: stream could not be decoded", station.name);
         }
         if (radio_keep_playing(&rs)) {
-            pause_while(RADIO_RETRY_MS, radio_mode_on); /* stream ended or broke: reconnect */
+            pause_while(RADIO_RETRY_MS, SOURCE_RADIO); /* stream ended or broke: reconnect */
         }
     }
     radio_stop();
@@ -519,7 +577,7 @@ typedef struct {
 static bool dlna_current(const dlna_source_t *ds, bool *paused)
 {
     static dlna_job_t now; /* holds a long URL; only the player task calls this */
-    if (airplay_active() || spotify_active() || !dlna_get_job(&now) || now.generation != ds->job.generation) {
+    if (wanted_source() != SOURCE_DLNA || !dlna_get_job(&now) || now.generation != ds->job.generation) {
         return false;
     }
     if (paused) {
@@ -613,21 +671,18 @@ static void play_dlna(void)
     dlna_finished(ds.job.generation, failed); /* ignored if the phone moved on meanwhile */
 }
 
-static void play_airplay(void)
+/* The phone's tracks one after another, until it closes the session */
+static void play_dlna_session(const cast_t *c)
 {
-    static int16_t pcm[352 * 2]; /* one AirPlay packet: 352 stereo frames */
-    set_status(PLAYER_CAST, "AirPlay");
-    ESP_LOGI(TAG, "AirPlay");
-    i2s_start(44100);
-    while (airplay_active()) {
-        size_t frames = airplay_read(pcm, 352, 100);
-        if (frames) {
-            play_pcm(pcm, frames * 2 * sizeof(int16_t), cast_gain(airplay_volume()), 2);
+    while (wanted_source() == SOURCE_DLNA) {
+        if (dlna_get_job(NULL)) {
+            play_dlna();
         } else {
-            led_music_set_levels(0, 0, 0, 0); /* paused on the phone: let the light fade */
+            /* Between tracks: the phone sends the next one in a moment */
+            led_music_set_levels(0, 0, 0, 0);
+            vTaskDelay(pdMS_TO_TICKS(20));
         }
     }
-    led_music_set_levels(0, 0, 0, 0);
 }
 
 /* Cut a string snprintf truncated back to whole UTF-8 characters */
@@ -647,39 +702,41 @@ static void utf8_trim(char *s)
     }
 }
 
-static void play_spotify(void)
+static void spotify_describe(char *out, size_t size)
 {
-    static int16_t *pcm; /* 1024 stereo frames, in PSRAM: internal RAM is short */
-    static spotify_status_t st;
-    if (pcm == NULL) {
-        pcm = heap_caps_malloc(1024 * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM);
-        if (pcm == NULL) {
-            return;
-        }
-    }
-    char shown[TRACK_NAME_SIZE] = "";
+    static spotify_status_t st; /* only the player task calls this */
+    spotify_get_status(&st);
+    snprintf(out, size, st.title[0] ? "Spotify: %s" : "Spotify", st.title);
+    utf8_trim(out);
+}
+
+static int16_t *cast_pcm; /* CAST_FRAMES stereo frames, in PSRAM: internal RAM is short */
+
+/* A receiver that decodes by itself: its PCM straight to the speaker */
+static void play_pcm_cast(const cast_t *c)
+{
+    char shown[TRACK_NAME_SIZE];
+    strlcpy(shown, c->name, sizeof(shown));
+    set_status(PLAYER_CAST, shown);
+    ESP_LOGI(TAG, "%s", c->name);
     int64_t next_info = 0;
-    ESP_LOGI(TAG, "Spotify");
     i2s_start(44100);
-    /* AirPlay wins when a phone starts it meanwhile */
-    while (spotify_active() && !airplay_active()) {
+    while (wanted_source() == c->source) {
         int64_t now = esp_timer_get_time();
-        if (now >= next_info) {
+        if (c->describe && now >= next_info) {
             next_info = now + 500000;
-            spotify_get_status(&st);
             char track[TRACK_NAME_SIZE];
-            snprintf(track, sizeof(track), st.title[0] ? "Spotify: %s" : "Spotify", st.title);
-            utf8_trim(track);
+            c->describe(track, sizeof(track));
             if (strcmp(track, shown) != 0) {
                 strlcpy(shown, track, sizeof(shown));
                 set_status(PLAYER_CAST, shown);
             }
         }
-        size_t frames = spotify_read(pcm, 1024, 100);
+        size_t frames = c->read(cast_pcm, CAST_FRAMES, 100);
         if (frames) {
-            play_pcm(pcm, frames * 2 * sizeof(int16_t), cast_gain(spotify_volume()), 2);
+            play_pcm(cast_pcm, frames * 2 * sizeof(int16_t), cast_gain(c->volume()), 2);
         } else {
-            led_music_set_levels(0, 0, 0, 0); /* paused in the app or buffering: let the light fade */
+            led_music_set_levels(0, 0, 0, 0); /* paused on the phone or buffering: let the light fade */
         }
     }
     led_music_set_levels(0, 0, 0, 0);
@@ -689,19 +746,9 @@ static void play_spotify(void)
 static bool play_cast(void)
 {
     bool played = false;
-    while (cast_active()) {
+    for (const cast_t *c; (c = cast_of(wanted_source())) != NULL;) {
         played = true;
-        if (airplay_active()) {
-            play_airplay();
-        } else if (spotify_active()) {
-            play_spotify();
-        } else if (dlna_get_job(NULL)) {
-            play_dlna();
-        } else {
-            /* Between tracks: the phone sends the next one in a moment */
-            led_music_set_levels(0, 0, 0, 0);
-            vTaskDelay(pdMS_TO_TICKS(20));
-        }
+        c->play(c);
     }
     return played;
 }
@@ -714,10 +761,11 @@ static void wait_for_trigger(bool first_cycle, TickType_t cycle_end)
 {
     bool waiting = false;
     for (;;) {
-        if (cast_active()) {
+        source_t source = wanted_source();
+        if (cast_of(source)) {
             return;
         }
-        if (!running) {
+        if (source == SOURCE_NONE) {
             if (status != PLAYER_STOPPED) {
                 ESP_LOGI(TAG, "Stopped");
                 set_status(PLAYER_STOPPED, NULL);
@@ -769,12 +817,10 @@ static void player_task(void *arg)
         }
         wait_for_trigger(first_cycle, cycle_end);
         first_cycle = false;
-        if (cast_active()) {
-            continue;
-        }
 
         bool played = true;
-        if (settings_get_mode() == PLAYER_MODE_RADIO) {
+        switch (wanted_source()) {
+        case SOURCE_RADIO: {
             /* With the sensor, a "cycle" of the radio is a fixed time */
             sensor_settings_t ss;
             settings_get_sensor(&ss);
@@ -784,8 +830,13 @@ static void player_task(void *arg)
                 deadline += deadline == 0; /* 0 means no deadline */
             }
             play_radio(deadline);
-        } else {
+            break;
+        }
+        case SOURCE_PLAYLIST:
             played = play_cycle();
+            break;
+        default:
+            continue; /* a phone casts, or stopped meanwhile */
         }
         cycle_end = xTaskGetTickCount();
         if (!played && running) {
@@ -798,7 +849,9 @@ static void player_task(void *arg)
 void player_play(void)
 {
     /* While a cycle is on, a pending start would add one more right after it */
+    portENTER_CRITICAL(&status_lock);
     player_status_t s = status;
+    portEXIT_CRITICAL(&status_lock);
     if (!running || s == PLAYER_STOPPED || s == PLAYER_WAITING || s == PLAYER_IDLE) {
         atomic_store(&start_now, true);
     }
@@ -808,14 +861,16 @@ void player_play(void)
 void player_stop(void)
 {
     atomic_store(&running, false);
-    dlna_stop();
-    airplay_stop();
-    spotify_stop();
+    for (size_t i = 0; i < ARRAY_SIZE(CASTS); i++) {
+        CASTS[i].stop();
+    }
 }
 
 void player_start(void)
 {
     radio_init();
+    cast_pcm = heap_caps_malloc(CAST_FRAMES * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM);
+    assert(cast_pcm);
     /* MP3/AAC decoder needs more stack than the default main task has */
     xTaskCreate(player_task, "player", 8192, NULL, 5, NULL);
 }
