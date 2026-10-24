@@ -1,3 +1,6 @@
 build/
 managed_components/
 sdkconfig.old
+# Bundled tracks are not published: put your own MP3s here before "idf.py storage-flash"
+assets/tracks/*
+!assets/tracks/.gitkeep
