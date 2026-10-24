@@ -10,6 +10,7 @@
 #include "driver/i2s_std.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "esp_audio_dec_default.h"
 #include "esp_audio_simple_dec_default.h"
 #include "airplay.h"
@@ -468,7 +469,7 @@ static void play_radio(TickType_t deadline)
             .buffering = true,
         };
         strlcpy(rs.url, station.url, sizeof(rs.url));
-        rs.generation = radio_play(rs.url, NULL, true);
+        rs.generation = radio_play(rs.url, NULL, true, 0);
         set_status(PLAYER_RADIO, station.name);
         ESP_LOGI(TAG, "Radio: %s", station.name);
 
@@ -506,6 +507,9 @@ static int cast_gain(uint8_t volume)
 typedef struct {
     audio_source_t base;
     dlna_job_t job;
+    radio_codec_t codec;
+    uint32_t bytes_read;    /* to estimate the bitrate when the length is unknown */
+    int64_t last_info_us;
 } dlna_source_t;
 
 /* The job is still the one being played; paused (may be NULL) tells if it is on hold */
@@ -533,7 +537,9 @@ static size_t dlna_source_read(audio_source_t *src, uint8_t *buf, size_t len)
         radio_status_t st;
         radio_get_status(&st);
         if (!paused && st.buffered > 0) {
-            return radio_read(buf, len);
+            size_t n = radio_read(buf, len);
+            ds->bytes_read += n;
+            return n;
         }
         if (st.buffered == 0 && (st.state == RADIO_ENDED || st.state == RADIO_ERROR)) {
             return 0;
@@ -549,7 +555,20 @@ static int dlna_source_volume(audio_source_t *src)
         return -1;
     }
     if (src->sample_rate) {
-        dlna_set_position(ds->job.generation, src->frames_played * 1000 / src->sample_rate);
+        uint32_t played_ms = src->frames_played * 1000 / src->sample_rate;
+        dlna_set_position(ds->job.generation, ds->job.start_ms + played_ms);
+
+        /* Once a second: what the phone needs to offer seeking */
+        int64_t now = esp_timer_get_time();
+        if (now - ds->last_info_us > 1000000 && played_ms > 1000) {
+            ds->last_info_us = now;
+            radio_status_t st;
+            radio_get_status(&st);
+            /* Raw MP3 / ADTS AAC frames resync anywhere; FLAC, WAV, M4A need their header */
+            bool format_ok = ds->codec == RADIO_CODEC_MP3 || ds->codec == RADIO_CODEC_AAC;
+            uint32_t bps = (uint64_t)ds->bytes_read * 8000 / played_ms;
+            dlna_set_stream_info(ds->job.generation, st.content_length, bps, st.seekable && format_ok);
+        }
     }
     return dlna_muted() ? 0 : cast_gain(dlna_volume());
 }
@@ -561,7 +580,9 @@ static void play_dlna(void)
         return;
     }
     ds.base = (audio_source_t){ .read = dlna_source_read, .volume = dlna_source_volume };
-    uint32_t gen = radio_play(ds.job.url, ds.job.mime, false);
+    ds.bytes_read = 0;
+    ds.last_info_us = 0;
+    uint32_t gen = radio_play(ds.job.url, ds.job.mime, false, ds.job.byte_offset);
     set_status(PLAYER_CAST, ds.job.title[0] ? ds.job.title : "DLNA");
     ESP_LOGI(TAG, "DLNA: %s", ds.job.title[0] ? ds.job.title : ds.job.url);
 
@@ -580,6 +601,7 @@ static void play_dlna(void)
     }
     bool failed = st.state == RADIO_ERROR && st.buffered == 0;
     if (!failed) {
+        ds.codec = st.codec;
         ds.base.type = decoder_type(st.codec);
         failed = !decode(&ds.base);
     }

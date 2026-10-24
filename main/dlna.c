@@ -88,6 +88,11 @@ static char title[64];
 static uint32_t duration_ms;
 static uint32_t position_ms;
 static uint32_t generation;
+static uint32_t start_ms, byte_offset;  /* where the current generation starts */
+static char *next_uri;                  /* STREAM_URL_SIZE, queued by SetNextAVTransportURI */
+static char *next_meta;                 /* META_SIZE */
+static uint32_t content_length, bitrate; /* reported by the player */
+static bool seekable;
 static uint8_t volume = 50;
 static bool mute;
 static subscriber_t subs[MAX_SUBSCRIBERS];
@@ -319,6 +324,7 @@ static const char AVT_SCPD[] = SCPD_HEAD
            OUT("RecMedia", "PossibleRecordStorageMedia") OUT("RecQualityModes", "PossibleRecordQualityModes"))
     ACTION("GetTransportSettings", INSTANCE OUT("PlayMode", "CurrentPlayMode") OUT("RecQualityMode", "CurrentRecordQualityMode"))
     ACTION("GetCurrentTransportActions", INSTANCE OUT("Actions", "CurrentTransportActions"))
+    ACTION("SetNextAVTransportURI", INSTANCE IN("NextURI", "NextAVTransportURI") IN("NextURIMetaData", "NextAVTransportURIMetaData"))
     ACTION("Stop", INSTANCE)
     ACTION("Play", INSTANCE IN("Speed", "TransportPlaySpeed"))
     ACTION("Pause", INSTANCE)
@@ -442,14 +448,47 @@ static void parse_metadata(const char *didl)
     }
 }
 
+/* What the control point may offer right now: it greys out the rest */
 static const char *transport_actions(void)
 {
-    switch (state) {
-    case TS_PLAYING: return "Pause,Stop";
-    case TS_PAUSED: return "Play,Stop";
-    case TS_STOPPED: return "Play";
-    default: return "";
+    static char actions[64];
+    actions[0] = '\0';
+    if (state == TS_NO_MEDIA) {
+        return actions;
     }
+    strlcat(actions, state == TS_PLAYING ? "Pause,Stop,Previous" :
+                     state == TS_PAUSED ? "Play,Stop,Previous" : "Play,Previous", sizeof(actions));
+    if (next_uri[0]) {
+        strlcat(actions, ",Next", sizeof(actions));
+    }
+    if (seekable && state != TS_STOPPED) {
+        strlcat(actions, ",Seek", sizeof(actions));
+    }
+    return actions;
+}
+
+/* Restart the stream (new generation) at a position, keeping play / pause */
+static void restart_at(uint32_t ms, uint32_t offset)
+{
+    generation++;
+    start_ms = ms;
+    byte_offset = offset;
+    position_ms = ms;
+    mark_dirty(SERVICE_AVT);
+}
+
+/* The queued track becomes the current one */
+static void switch_to_next(void)
+{
+    strlcpy(uri, next_uri, STREAM_URL_SIZE);
+    strlcpy(meta, next_meta, META_SIZE);
+    next_uri[0] = next_meta[0] = '\0';
+    parse_metadata(meta);
+    content_length = bitrate = 0;
+    seekable = false;
+    state = TS_PLAYING;
+    restart_at(0, 0);
+    ESP_LOGI(TAG, "Next: %s", title[0] ? title : uri);
 }
 
 /* Runs under lock; writes the action's out arguments to b or returns a UPnP error code */
@@ -467,7 +506,10 @@ static int handle_action(service_t service, const char *action, const char *body
                 meta[0] = '\0';
             }
             parse_metadata(meta);
-            position_ms = 0;
+            next_uri[0] = next_meta[0] = '\0';
+            content_length = bitrate = 0;
+            seekable = false;
+            position_ms = start_ms = byte_offset = 0;
             if (state == TS_PLAYING) {
                 generation++; /* new track while playing: switch to it */
             } else {
@@ -480,8 +522,7 @@ static int handle_action(service_t service, const char *action, const char *body
                 return 701;
             }
             if (state == TS_STOPPED) {
-                generation++;
-                position_ms = 0;
+                restart_at(0, 0);
             }
             state = TS_PLAYING;
             mark_dirty(SERVICE_AVT);
@@ -497,10 +538,52 @@ static int handle_action(service_t service, const char *action, const char *body
                 position_ms = 0;
                 mark_dirty(SERVICE_AVT);
             }
+        } else if (strcmp(action, "SetNextAVTransportURI") == 0) {
+            if (!xml_get(body, "NextURI", next_uri, STREAM_URL_SIZE)) {
+                return 402;
+            }
+            if (!xml_get(body, "NextURIMetaData", next_meta, META_SIZE)) {
+                next_meta[0] = '\0';
+            }
+            ESP_LOGI(TAG, "Queued next: %s", next_uri);
+            mark_dirty(SERVICE_AVT);
         } else if (strcmp(action, "Seek") == 0) {
-            return 710; /* a stream cannot be repositioned */
-        } else if (strcmp(action, "Next") == 0 || strcmp(action, "Previous") == 0) {
-            return 701;
+            char unit[16], target[32];
+            if (!xml_get(body, "Unit", unit, sizeof(unit)) || !xml_get(body, "Target", target, sizeof(target))) {
+                return 402;
+            }
+            if (strcmp(unit, "REL_TIME") != 0 && strcmp(unit, "ABS_TIME") != 0) {
+                return 710; /* track numbers / byte counters */
+            }
+            if (state != TS_PLAYING && state != TS_PAUSED) {
+                return 701;
+            }
+            if (!seekable || (duration_ms == 0 && bitrate == 0)) {
+                return 710; /* the server or the format cannot start mid-file */
+            }
+            uint32_t ms = parse_time(target);
+            if (duration_ms && ms > duration_ms) {
+                return 711;
+            }
+            /* Proportional in the file when the length is known, else from the bitrate */
+            uint64_t offset = duration_ms ? (uint64_t)content_length * ms / duration_ms
+                                          : (uint64_t)ms * bitrate / 8000;
+            if (offset >= content_length) {
+                return 711;
+            }
+            ESP_LOGI(TAG, "Seek to %s (byte %" PRIu32 ")", target, (uint32_t)offset);
+            restart_at(ms, (uint32_t)offset);
+        } else if (strcmp(action, "Next") == 0) {
+            if (!next_uri[0]) {
+                return 701;
+            }
+            switch_to_next();
+        } else if (strcmp(action, "Previous") == 0) {
+            /* No history here, the phone keeps the queue: start this track over */
+            if (state == TS_NO_MEDIA) {
+                return 701;
+            }
+            restart_at(0, 0);
         } else if (strcmp(action, "GetTransportInfo") == 0) {
             sb_printf(b, "<CurrentTransportState>%s</CurrentTransportState>"
                          "<CurrentTransportStatus>OK</CurrentTransportStatus><CurrentSpeed>1</CurrentSpeed>",
@@ -522,8 +605,11 @@ static int handle_action(service_t service, const char *action, const char *body
             sb_escaped(b, uri);
             sb_add(b, "</CurrentURI><CurrentURIMetaData>");
             sb_escaped(b, meta);
-            sb_add(b, "</CurrentURIMetaData><NextURI></NextURI><NextURIMetaData></NextURIMetaData>"
-                      "<PlayMedium>NETWORK</PlayMedium><RecordMedium>NOT_IMPLEMENTED</RecordMedium>"
+            sb_add(b, "</CurrentURIMetaData><NextURI>");
+            sb_escaped(b, next_uri);
+            sb_add(b, "</NextURI><NextURIMetaData>");
+            sb_escaped(b, next_meta);
+            sb_add(b, "</NextURIMetaData><PlayMedium>NETWORK</PlayMedium><RecordMedium>NOT_IMPLEMENTED</RecordMedium>"
                       "<WriteStatus>NOT_IMPLEMENTED</WriteStatus>");
         } else if (strcmp(action, "GetCurrentTransportActions") == 0) {
             sb_printf(b, "<Actions>%s</Actions>", transport_actions());
@@ -660,6 +746,8 @@ static void last_change(service_t service, sbuf_t *b)
         sb_escaped(b, uri);
         sb_add(b, "\"/><CurrentTrackURI val=\"");
         sb_escaped(b, uri);
+        sb_add(b, "\"/><NextAVTransportURI val=\"");
+        sb_escaped(b, next_uri);
         sb_add(b, "\"/></InstanceID></Event>");
     } else if (service == SERVICE_RCS) {
         sb_printf(b, "<Event xmlns=\"urn:schemas-upnp-org:metadata-1-0/RCS/\"><InstanceID val=\"0\">"
@@ -995,9 +1083,11 @@ static void ssdp_task(void *arg)
 void dlna_start(httpd_handle_t httpd)
 {
     lock = xSemaphoreCreateMutex();
-    uri = calloc(1, STREAM_URL_SIZE);
-    meta = calloc(1, META_SIZE);
-    assert(lock && uri && meta);
+    uri = heap_caps_calloc(1, STREAM_URL_SIZE, MALLOC_CAP_SPIRAM);
+    meta = heap_caps_calloc(1, META_SIZE, MALLOC_CAP_SPIRAM);
+    next_uri = heap_caps_calloc(1, STREAM_URL_SIZE, MALLOC_CAP_SPIRAM);
+    next_meta = heap_caps_calloc(1, META_SIZE, MALLOC_CAP_SPIRAM);
+    assert(lock && uri && meta && next_uri && next_meta);
 
     uint8_t mac[6];
     esp_read_mac(mac, ESP_MAC_WIFI_STA);
@@ -1031,6 +1121,8 @@ bool dlna_get_job(dlna_job_t *out)
     if (active && out) {
         out->generation = generation;
         out->paused = state == TS_PAUSED;
+        out->start_ms = start_ms;
+        out->byte_offset = byte_offset;
         strlcpy(out->url, uri, sizeof(out->url));
         strlcpy(out->mime, mime, sizeof(out->mime));
         strlcpy(out->title, title, sizeof(out->title));
@@ -1048,9 +1140,32 @@ void dlna_set_position(uint32_t gen, uint32_t ms)
     xSemaphoreGive(lock);
 }
 
+void dlna_set_stream_info(uint32_t gen, uint32_t length, uint32_t bps, bool can_seek)
+{
+    xSemaphoreTake(lock, portMAX_DELAY);
+    if (gen == generation) {
+        if (length) {
+            content_length = length;
+        }
+        if (bps) {
+            bitrate = bps;
+        }
+        if (can_seek != seekable) {
+            seekable = can_seek;
+            mark_dirty(SERVICE_AVT); /* Seek appears in / leaves the transport actions */
+        }
+    }
+    xSemaphoreGive(lock);
+}
+
 void dlna_finished(uint32_t gen, bool failed)
 {
     xSemaphoreTake(lock, portMAX_DELAY);
+    if (gen == generation && !failed && next_uri[0] && state == TS_PLAYING) {
+        switch_to_next(); /* gapless-ish: the phone queued it with SetNextAVTransportURI */
+        xSemaphoreGive(lock);
+        return;
+    }
     if (gen == generation && (state == TS_PLAYING || state == TS_PAUSED)) {
         ESP_LOGI(TAG, "%s %s", title[0] ? title : uri, failed ? "could not be played" : "finished");
         state = TS_STOPPED;

@@ -1,4 +1,6 @@
 #include <ctype.h>
+#include <inttypes.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
@@ -34,6 +36,32 @@ static SemaphoreHandle_t req_lock;
 static char wanted_url[STREAM_URL_SIZE];
 static char wanted_mime[48];
 static bool wanted_live;
+static uint32_t wanted_offset;
+
+/* Response headers of the current request, collected by the client's event handler
+ * (esp_http_client_get_header() only reads request headers) */
+static struct {
+    char content_type[64];
+    bool accept_ranges;
+    uint32_t range_total; /* from Content-Range: bytes a-b/total */
+} resp;
+
+static esp_err_t http_event(esp_http_client_event_t *evt)
+{
+    if (evt->event_id != HTTP_EVENT_ON_HEADER) {
+        return ESP_OK;
+    }
+    if (strcasecmp(evt->header_key, "Content-Type") == 0) {
+        strlcpy(resp.content_type, evt->header_value, sizeof(resp.content_type));
+    } else if (strcasecmp(evt->header_key, "Accept-Ranges") == 0) {
+        resp.accept_ranges = strcasestr(evt->header_value, "bytes") != NULL;
+    } else if (strcasecmp(evt->header_key, "Content-Range") == 0) {
+        const char *slash = strchr(evt->header_value, '/');
+        resp.range_total = slash ? strtoul(slash + 1, NULL, 10) : 0;
+        resp.accept_ranges = true;
+    }
+    return ESP_OK;
+}
 static uint32_t wanted_gen;
 static radio_status_t status;
 static TaskHandle_t task;
@@ -76,6 +104,10 @@ static void ring_reset(void)
 static void set_status(uint32_t gen, radio_state_t state, radio_codec_t codec, const char *error)
 {
     xSemaphoreTake(req_lock, portMAX_DELAY);
+    if (gen != status.generation) {
+        status.content_length = 0;
+        status.seekable = false;
+    }
     status.generation = gen;
     status.state = state;
     status.codec = codec;
@@ -160,7 +192,8 @@ static bool detect_codec(const char *mime, const char *url, radio_codec_t *out)
 /* Connect, follow redirects and playlists, then pump the stream into the ring until the
  * request changes (returns NULL), the file ends (returns NULL, *ended) or something fails
  * (returns the reason) */
-static const char *stream(const char *start_url, const char *mime_hint, uint32_t gen, bool *ended)
+static const char *stream(const char *start_url, const char *mime_hint, uint32_t offset, uint32_t gen,
+                          bool *ended)
 {
     static char url[STREAM_URL_SIZE];
     static char error[96];
@@ -174,15 +207,22 @@ static const char *stream(const char *start_url, const char *mime_hint, uint32_t
             .buffer_size = 2048, /* response headers of streaming servers can be long */
             .crt_bundle_attach = esp_crt_bundle_attach,
             .max_redirection_count = MAX_REDIRECTS,
+            .event_handler = http_event,
         };
         esp_http_client_handle_t client = esp_http_client_init(&cfg);
         if (client == NULL) {
             return "Нет памяти для соединения";
         }
+        if (offset) {
+            char range[32];
+            snprintf(range, sizeof(range), "bytes=%" PRIu32 "-", offset);
+            esp_http_client_set_header(client, "Range", range);
+        }
 
         int code = 0;
         const char *fail = NULL;
         for (int redirects = 0;; redirects++) {
+            memset(&resp, 0, sizeof(resp));
             if (esp_http_client_open(client, 0) != ESP_OK) {
                 fail = "Сервер недоступен";
                 break;
@@ -198,7 +238,7 @@ static const char *stream(const char *start_url, const char *mime_hint, uint32_t
             esp_http_client_set_redirection(client);
             esp_http_client_close(client);
         }
-        if (fail == NULL && code != 200) {
+        if (fail == NULL && code != 200 && !(code == 206 && offset)) {
             snprintf(error, sizeof(error), "Сервер ответил кодом %d", code);
             fail = error;
         }
@@ -207,10 +247,8 @@ static const char *stream(const char *start_url, const char *mime_hint, uint32_t
             return fail;
         }
 
-        char *type = NULL;
-        esp_http_client_get_header(client, "Content-Type", &type);
         char content_type[64];
-        strlcpy(content_type, type ? type : "", sizeof(content_type));
+        strlcpy(content_type, resp.content_type, sizeof(content_type));
         lower(content_type);
         if (strstr(content_type, "octet-stream")) {
             content_type[0] = '\0'; /* says nothing about the format */
@@ -240,9 +278,20 @@ static const char *stream(const char *start_url, const char *mime_hint, uint32_t
             return error;
         }
 
+        if (offset && code == 200) {
+            ESP_LOGW(TAG, "Server ignored the range, playing from the start");
+        }
+        int64_t length = esp_http_client_get_content_length(client);
+        uint32_t total = code == 206 ? resp.range_total : length > 0 ? (uint32_t)length : 0;
+
         static const char *const CODEC_NAMES[] = { "MP3", "AAC", "FLAC", "WAV", "M4A" };
-        ESP_LOGI(TAG, "Streaming %s (%s)", url, CODEC_NAMES[codec]);
+        ESP_LOGI(TAG, "Streaming %s (%s, %" PRIu32 " bytes%s%s)", url, CODEC_NAMES[codec], total,
+                 resp.accept_ranges ? ", seekable" : "", code == 206 ? ", from offset" : "");
         set_status(gen, RADIO_STREAMING, codec, NULL);
+        xSemaphoreTake(req_lock, portMAX_DELAY);
+        status.content_length = total;
+        status.seekable = resp.accept_ranges && total > 0;
+        xSemaphoreGive(req_lock);
         fail = NULL;
         while (!changed(gen)) {
             int n = esp_http_client_read(client, (char *)rx_buf, sizeof(rx_buf));
@@ -277,6 +326,7 @@ static void radio_task(void *arg)
         strlcpy(url, wanted_url, sizeof(url));
         strlcpy(mime, wanted_mime, sizeof(mime));
         bool live = wanted_live;
+        uint32_t offset = wanted_offset;
         uint32_t gen = wanted_gen;
         xSemaphoreGive(req_lock);
         lower(mime);
@@ -298,7 +348,7 @@ static void radio_task(void *arg)
             }
             set_status(gen, RADIO_CONNECTING, RADIO_CODEC_MP3, NULL);
             bool ended = false;
-            const char *error = stream(url, mime, gen, &ended);
+            const char *error = stream(url, mime, offset, gen, &ended);
             if (changed(gen)) {
                 break;
             }
@@ -334,12 +384,13 @@ void radio_init(void)
     xTaskCreateWithCaps(radio_task, "radio", 8192, NULL, 6, &task, MALLOC_CAP_SPIRAM);
 }
 
-uint32_t radio_play(const char *url, const char *mime_hint, bool live)
+uint32_t radio_play(const char *url, const char *mime_hint, bool live, uint32_t offset)
 {
     xSemaphoreTake(req_lock, portMAX_DELAY);
     strlcpy(wanted_url, url, sizeof(wanted_url));
     strlcpy(wanted_mime, mime_hint ? mime_hint : "", sizeof(wanted_mime));
     wanted_live = live;
+    wanted_offset = offset;
     uint32_t gen = ++wanted_gen;
     xSemaphoreGive(req_lock);
     xTaskNotifyGive(task);
@@ -348,7 +399,7 @@ uint32_t radio_play(const char *url, const char *mime_hint, bool live)
 
 void radio_stop(void)
 {
-    radio_play("", NULL, false);
+    radio_play("", NULL, false, 0);
 }
 
 uint32_t radio_generation(void)

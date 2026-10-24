@@ -31,16 +31,18 @@ typedef struct {
     radio_codec_t codec;
     size_t buffered;     /* bytes waiting in the buffer */
     size_t buffer_size;
+    uint32_t content_length; /* whole file size, 0 when unknown (live stream) */
+    bool seekable;           /* the server serves byte ranges */
     char error[96];
 } radio_status_t;
 
 void radio_init(void);
 
 /* Switch to a stream (empty url stops). live: a radio station, reconnected forever; otherwise
- * a file, received once (RADIO_ENDED / RADIO_ERROR). mime_hint (may be NULL) helps when the
- * server does not tell the format. Returns the new request generation; buffered data
- * belongs to it once radio_get_status() reports this generation. */
-uint32_t radio_play(const char *url, const char *mime_hint, bool live);
+ * a file, received once (RADIO_ENDED / RADIO_ERROR), from byte offset on. mime_hint (may be
+ * NULL) helps when the server does not tell the format. Returns the new request generation;
+ * buffered data belongs to it once radio_get_status() reports this generation. */
+uint32_t radio_play(const char *url, const char *mime_hint, bool live, uint32_t offset);
 void radio_stop(void);
 uint32_t radio_generation(void);
 
