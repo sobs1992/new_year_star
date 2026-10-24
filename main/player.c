@@ -304,7 +304,7 @@ static esp_audio_simple_dec_type_t decoder_type(radio_codec_t codec)
 /* A phone casting (DLNA / AirPlay) takes over from the playlist, the radio and the sensor */
 static bool cast_active(void)
 {
-    return airplay_active() || dlna_get_job(NULL);
+    return airplay_active() || dlna_session_open();
 }
 
 /* ---- Playlist: MP3 files from storage ---- */
@@ -599,7 +599,7 @@ static void play_dlna(void)
         if (st.generation == gen && st.state != RADIO_CONNECTING && st.state != RADIO_STOPPED) {
             break;
         }
-        vTaskDelay(pdMS_TO_TICKS(TRIGGER_POLL_MS));
+        vTaskDelay(pdMS_TO_TICKS(20)); /* a file on the local network connects in milliseconds */
     }
     bool failed = st.state == RADIO_ERROR && st.buffered == 0;
     if (!failed) {
@@ -636,8 +636,12 @@ static bool play_cast(void)
         played = true;
         if (airplay_active()) {
             play_airplay();
-        } else {
+        } else if (dlna_get_job(NULL)) {
             play_dlna();
+        } else {
+            /* Between tracks: the phone sends the next one in a moment */
+            led_music_set_levels(0, 0, 0, 0);
+            vTaskDelay(pdMS_TO_TICKS(20));
         }
     }
     return played;

@@ -454,6 +454,9 @@ static esp_err_t wifi_scan_get(httpd_req_t *req)
 /* Any unknown URL (phone connectivity checks included) goes to the settings page */
 static esp_err_t redirect_to_portal(httpd_req_t *req, httpd_err_code_t err)
 {
+    if (req->method != HTTP_GET) {
+        ESP_LOGW(TAG, "No handler for %s %s", http_method_str(req->method), req->uri);
+    }
     httpd_resp_set_status(req, "302 Found");
     httpd_resp_set_hdr(req, "Location", "/"); /* relative: works on the star network and at home */
     /* iOS needs a body to detect the captive portal */

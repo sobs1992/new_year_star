@@ -24,6 +24,11 @@ void dlna_start(httpd_handle_t httpd);
 /* What the phone wants played: true while playing or paused. out may be NULL. */
 bool dlna_get_job(dlna_job_t *out);
 
+/* Playing, paused, or a phone sent a transport command a moment ago. Switching tracks is
+ * Stop, SetAVTransportURI, Play: in between the star must not go back to its own playlist or
+ * radio (a radio TLS handshake would hold up the next track for seconds). */
+bool dlna_session_open(void);
+
 /* From the player: progress, what is known about the file (seekable: byte ranges work and
  * the format can start mid-file), and the end of a job (failed: could not be played) */
 void dlna_set_position(uint32_t generation, uint32_t ms);

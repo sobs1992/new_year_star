@@ -28,7 +28,8 @@
 #define META_SIZE       4096       /* DIDL-Lite of the current track, kept for GetMediaInfo */
 #define MAX_SUBSCRIBERS 6
 #define SUB_TIMEOUT_S   1800
-#define EVENT_URL_SIZE  192
+#define EVENT_URL_SIZE  384
+#define LINGER_MS       5000       /* keep the session after Stop, the next Play comes soon */
 
 #define DEVICE_TYPE     "urn:schemas-upnp-org:device:MediaRenderer:1"
 #define AVT_TYPE        "urn:schemas-upnp-org:service:AVTransport:1"
@@ -93,6 +94,7 @@ static char *next_uri;                  /* STREAM_URL_SIZE, queued by SetNextAVT
 static char *next_meta;                 /* META_SIZE */
 static uint32_t content_length, bitrate; /* reported by the player */
 static bool seekable;
+static int64_t last_command_us;         /* last AVTransport command from a phone */
 static uint8_t volume = 50;
 static bool mute;
 static subscriber_t subs[MAX_SUBSCRIBERS];
@@ -710,6 +712,12 @@ static esp_err_t control_post(httpd_req_t *req)
 
     xSemaphoreTake(lock, portMAX_DELAY);
     int error = handle_action(service, action, body, &b);
+    if (service == SERVICE_AVT && strncmp(action, "Get", 3) != 0) {
+        last_command_us = esp_timer_get_time(); /* not the polling, only real commands */
+    }
+    if (strncmp(action, "Get", 3) != 0) {
+        ESP_LOGI(TAG, "%s#%s -> %s", SERVICE_NAMES[service], action, TS_NAMES[state]);
+    }
     xSemaphoreGive(lock);
     free(body);
 
@@ -805,9 +813,14 @@ static void send_event(subscriber_t *sub)
         esp_http_client_set_header(client, "SID", sid);
         esp_http_client_set_header(client, "SEQ", seq_str);
         esp_http_client_set_post_field(client, body.buf, body.len);
+        int64_t t0 = esp_timer_get_time();
         esp_err_t err = esp_http_client_perform(client);
+        int ms = (int)((esp_timer_get_time() - t0) / 1000);
         if (err != ESP_OK) {
-            ESP_LOGW(TAG, "Event to %s failed: %s", url, esp_err_to_name(err));
+            ESP_LOGW(TAG, "Event %s #%" PRIu32 " to %s failed: %s, %d ms", SERVICE_NAMES[service], seq, url,
+                     esp_err_to_name(err), ms);
+        } else {
+            ESP_LOGD(TAG, "Event %s #%" PRIu32 " to %s, %d ms", SERVICE_NAMES[service], seq, url, ms);
         }
         esp_http_client_cleanup(client);
     }
@@ -847,6 +860,7 @@ static esp_err_t subscribe(httpd_req_t *req)
     char sid[48] = "", callback[EVENT_URL_SIZE + 8] = "";
     httpd_req_get_hdr_value_str(req, "SID", sid, sizeof(sid));
     httpd_req_get_hdr_value_str(req, "CALLBACK", callback, sizeof(callback));
+    ESP_LOGI(TAG, "SUBSCRIBE %s sid=%s callback=%s", SERVICE_NAMES[service], sid[0] ? sid : "-", callback);
 
     xSemaphoreTake(lock, portMAX_DELAY);
     subscriber_t *sub = NULL;
@@ -857,6 +871,7 @@ static esp_err_t subscribe(httpd_req_t *req)
     }
     if (sub == NULL && sid[0]) {
         xSemaphoreGive(lock);
+        ESP_LOGW(TAG, "Renewal of unknown %s: 412, the control point must subscribe anew", sid);
         httpd_resp_set_status(req, "412 Precondition Failed");
         return httpd_resp_send(req, NULL, 0);
     }
@@ -866,6 +881,7 @@ static esp_err_t subscribe(httpd_req_t *req)
         char *end = start ? strchr(start, '>') : NULL;
         if (end == NULL) {
             xSemaphoreGive(lock);
+            ESP_LOGW(TAG, "SUBSCRIBE without a usable CALLBACK: 412");
             httpd_resp_set_status(req, "412 Precondition Failed");
             return httpd_resp_send(req, NULL, 0);
         }
@@ -1131,6 +1147,18 @@ bool dlna_get_job(dlna_job_t *out)
     return active;
 }
 
+bool dlna_session_open(void)
+{
+    if (lock == NULL) {
+        return false;
+    }
+    xSemaphoreTake(lock, portMAX_DELAY);
+    bool open = state == TS_PLAYING || state == TS_PAUSED ||
+                (last_command_us && esp_timer_get_time() - last_command_us < LINGER_MS * 1000LL);
+    xSemaphoreGive(lock);
+    return open;
+}
+
 void dlna_set_position(uint32_t gen, uint32_t ms)
 {
     xSemaphoreTake(lock, portMAX_DELAY);
@@ -1186,6 +1214,7 @@ void dlna_stop(void)
         position_ms = 0;
         mark_dirty(SERVICE_AVT);
     }
+    last_command_us = 0; /* the stop button: back to the own playback at once */
     xSemaphoreGive(lock);
 }
 
