@@ -8,6 +8,8 @@
 #include "esp_log.h"
 #include "esp_random.h"
 #include "nvs.h"
+#include <sys/stat.h>
+#include "esp_littlefs.h"
 #include "storage.h"
 #include "stubs.h"
 
@@ -149,25 +151,35 @@ void nvs_close(nvs_handle_t h)
     handles[h - 1][0] = '\0';
 }
 
-/* ---------- storage ---------- */
+/* ---------- LittleFS ---------- */
 
-void storage_info(size_t *total, size_t *used)
+esp_err_t esp_vfs_littlefs_register(const esp_vfs_littlefs_conf_t *conf)
+{
+    return ESP_OK;
+}
+
+esp_err_t esp_littlefs_info(const char *partition_label, size_t *total, size_t *used)
 {
     *total = 5 * 1024 * 1024;
     *used = 1024 * 1024;
+    return ESP_OK;
 }
 
-size_t storage_upload_space(void)
+/* ---------- the track directory, linked with --wrap=opendir,readdir,closedir,stat ---------- */
+
+int __real_stat(const char *path, struct stat *st);
+
+/* A file in STORAGE_BASE_PATH is 100000 bytes plus the length of its name */
+int __wrap_stat(const char *path, struct stat *st)
 {
-    return 4 * 1024 * 1024 - 32 * 1024;
+    const char *dir = STORAGE_BASE_PATH "/";
+    if (strncmp(path, dir, strlen(dir)) != 0) {
+        return __real_stat(path, st);
+    }
+    memset(st, 0, sizeof(*st));
+    st->st_size = 100000 + strlen(path + strlen(dir));
+    return 0;
 }
-
-size_t storage_file_size(const char *name)
-{
-    return 100000 + strlen(name);
-}
-
-/* ---------- directory listing, linked with --wrap=opendir,readdir,closedir ---------- */
 
 static const char *const *files;
 static size_t file_count, file_pos;

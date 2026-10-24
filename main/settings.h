@@ -4,10 +4,10 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "esp_err.h"
+#include "storage.h"
 
 #define SETTINGS_MAX_TRACKS 32
 #define SETTINGS_MAX_LEDS   300
-#define TRACK_NAME_SIZE     64  /* bytes incl. '\0', LittleFS name limit */
 
 /* JSON keys, ranges and defaults of the fields below: the field tables in settings.c */
 
@@ -88,7 +88,7 @@ typedef struct {
     char spotify_client_secret[SPOTIFY_KEY_SIZE]; /* never sent to the web page */
 } cast_settings_t;
 
-/* Scan the MP3 files in storage, then load settings from NVS or fall back to defaults.
+/* List the MP3 files in storage, then load settings from NVS or fall back to defaults.
  * Needs nvs_flash_init and storage_init done. */
 void settings_init(void);
 
@@ -100,8 +100,6 @@ bool settings_find_track(const char *name, track_settings_t *out);
 /* A file was added to / removed from storage */
 esp_err_t settings_add_track(const char *name);
 void settings_remove_track(const char *name);
-/* Acceptable track file name: "*.mp3", not hidden, fits TRACK_NAME_SIZE */
-bool settings_is_track_name(const char *name);
 
 void settings_get_led(led_settings_t *out);
 /* Changes on every LED settings or player mode update, to re-read them cheaply */

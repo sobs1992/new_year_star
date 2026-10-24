@@ -3,7 +3,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 #include "esp_heap_caps.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
@@ -18,15 +17,14 @@
 #include "sensor.h"
 #include "settings.h"
 #include "status.h"
-#include "storage.h"
 #include "sysinfo.h"
+#include "tracks.h"
 #include "web.h"
 #include "wifi.h"
 
 #define MAX_BODY_SIZE   16384
 #define SCAN_MAX        20
 #define UPLOAD_CHUNK    4096
-#define DELETE_WAIT_MS  2000        /* for the player to close the file */
 
 extern const char index_html_start[] asm("_binary_index_html_start");
 extern const char index_html_end[] asm("_binary_index_html_end");
@@ -268,7 +266,7 @@ static int hex_value(char c)
     return isdigit((unsigned char)c) ? c - '0' : tolower((unsigned char)c) - 'a' + 10;
 }
 
-/* "name" query parameter, URL-decoded; false if missing or not an acceptable track name */
+/* "name" query parameter, URL-decoded; false if missing, too long or a path */
 static bool get_track_name(httpd_req_t *req, char name[TRACK_NAME_SIZE])
 {
     char query[3 * TRACK_NAME_SIZE + 16];
@@ -292,13 +290,7 @@ static bool get_track_name(httpd_req_t *req, char name[TRACK_NAME_SIZE])
         name[n++] = c;
     }
     name[n] = '\0';
-    return settings_is_track_name(name);
-}
-
-static bool looks_like_mp3(const uint8_t *d, size_t len)
-{
-    return len >= 3 && ((d[0] == 'I' && d[1] == 'D' && d[2] == '3') || /* ID3v2 tag */
-                        (d[0] == 0xFF && (d[1] & 0xE0) == 0xE0));    /* MPEG frame sync */
+    return true;
 }
 
 /* POST /api/tracks?name=<file.mp3> with the file as the raw body */
@@ -306,68 +298,42 @@ static esp_err_t track_upload(httpd_req_t *req)
 {
     char name[TRACK_NAME_SIZE];
     char msg[96];
-    track_settings_t ts;
     if (!get_track_name(req, name)) {
-        snprintf(msg, sizeof(msg), "Нужен файл .mp3 с именем не длиннее %d байт", TRACK_NAME_SIZE - 1);
-        return send_error(req, "400 Bad Request", msg);
+        name[0] = '\0'; /* tracks_upload_begin() explains what the name must be */
     }
-    if (settings_find_track(name, &ts)) {
-        return send_error(req, "409 Conflict", "Файл с таким именем уже есть");
-    }
-    if (settings_track_count() >= SETTINGS_MAX_TRACKS) {
-        snprintf(msg, sizeof(msg), "Не больше %d треков", SETTINGS_MAX_TRACKS);
-        return send_error(req, "400 Bad Request", msg);
-    }
-    size_t space = storage_upload_space();
-    if (req->content_len == 0 || req->content_len > space) {
-        snprintf(msg, sizeof(msg), "Файл %u КБ не помещается, свободно %u КБ",
-                 (unsigned)(req->content_len / 1024), (unsigned)(space / 1024));
-        return send_error(req, "413 Content Too Large", msg);
-    }
-
-    char path[128];
-    storage_path(name, path, sizeof(path));
-    FILE *f = fopen(STORAGE_UPLOAD_TMP, "wb");
     uint8_t *buf = malloc(UPLOAD_CHUNK);
-    const char *error = NULL;
-    if (f == NULL || buf == NULL) {
-        error = "Не удалось начать запись";
+    esp_err_t ret = ESP_ERR_NO_MEM;
+    if (buf == NULL) {
+        strlcpy(msg, "Не удалось начать запись", sizeof(msg));
+    } else {
+        ret = tracks_upload_begin(name, req->content_len, msg, sizeof(msg));
     }
 
     size_t received = 0;
-    while (error == NULL && received < req->content_len) {
+    while (ret == ESP_OK && received < req->content_len) {
         size_t want = req->content_len - received;
         int r = httpd_req_recv(req, (char *)buf, want < UPLOAD_CHUNK ? want : UPLOAD_CHUNK);
         if (r == HTTPD_SOCK_ERR_TIMEOUT) {
             continue;
         }
         if (r <= 0) {
-            error = "Загрузка прервалась";
-        } else if (received == 0 && !looks_like_mp3(buf, r)) {
-            error = "Это не MP3-файл";
-        } else if (fwrite(buf, 1, r, f) != (size_t)r) {
-            error = "Ошибка записи во flash";
+            tracks_upload_abort();
+            strlcpy(msg, "Загрузка прервалась", sizeof(msg));
+            ret = ESP_FAIL;
+            break;
         }
-        received += r > 0 ? r : 0;
+        ret = tracks_upload_write(buf, r, msg, sizeof(msg));
+        received += r;
     }
     free(buf);
-    if (f) {
-        fclose(f);
+    if (ret == ESP_OK) {
+        ret = tracks_upload_finish(msg, sizeof(msg));
     }
-
-    if (error == NULL && rename(STORAGE_UPLOAD_TMP, path) != 0) {
-        error = "Ошибка записи во flash";
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Upload of %s failed: %s", name, msg);
+        return send_error(req, ret == ESP_ERR_INVALID_STATE ? "409 Conflict" :
+                               ret == ESP_ERR_INVALID_SIZE ? "413 Content Too Large" : "400 Bad Request", msg);
     }
-    if (error == NULL && settings_add_track(name) != ESP_OK) {
-        unlink(path);
-        error = "Список треков переполнен";
-    }
-    if (error) {
-        unlink(STORAGE_UPLOAD_TMP);
-        ESP_LOGW(TAG, "Upload of %s failed: %s", name, error);
-        return send_error(req, "400 Bad Request", error);
-    }
-    ESP_LOGI(TAG, "Uploaded %s, %u bytes", name, (unsigned)received);
     return send_json(req, "200 OK", "{\"ok\":true}");
 }
 
@@ -375,24 +341,13 @@ static esp_err_t track_upload(httpd_req_t *req)
 static esp_err_t track_delete(httpd_req_t *req)
 {
     char name[TRACK_NAME_SIZE];
-    track_settings_t ts;
-    if (!get_track_name(req, name) || !settings_find_track(name, &ts)) {
+    esp_err_t ret = get_track_name(req, name) ? tracks_delete(name) : ESP_ERR_NOT_FOUND;
+    if (ret == ESP_ERR_NOT_FOUND) {
         return send_error(req, "404 Not Found", "Нет такого файла");
     }
-
-    /* Dropping it from the list makes the player stop it on the next frame */
-    settings_remove_track(name);
-    for (int waited = 0; player_is_playing(name) && waited < DELETE_WAIT_MS; waited += 50) {
-        vTaskDelay(pdMS_TO_TICKS(50));
-    }
-
-    char path[128];
-    storage_path(name, path, sizeof(path));
-    if (unlink(path) != 0) {
-        ESP_LOGW(TAG, "Delete of %s failed", name);
+    if (ret != ESP_OK) {
         return send_error(req, "500 Internal Server Error", "Не удалось удалить файл");
     }
-    ESP_LOGI(TAG, "Deleted %s", name);
     return send_json(req, "200 OK", "{\"ok\":true}");
 }
 

@@ -13,8 +13,8 @@ BUILD   := build
 SAN     := -fsanitize=address,undefined -fno-omit-frame-pointer
 CFLAGS  := -std=gnu17 -g -O1 $(SAN) -Wall -Wextra -Werror -Wno-unused-parameter -Wno-sign-compare
 INCLUDE := -I. -Istubs -I$(MAIN) -I$(CJSON)
-# The modules list STORAGE_BASE_PATH: stubs.c fakes it
-WRAP    := -Wl,--wrap=opendir,--wrap=readdir,--wrap=closedir
+# The track directory STORAGE_BASE_PATH is faked in stubs.c
+WRAP    := -Wl,--wrap=opendir,--wrap=readdir,--wrap=closedir,--wrap=stat
 
 TESTS   := test_settings
 
@@ -28,9 +28,10 @@ run-%: $(BUILD)/%
 $(BUILD)/cJSON.o: $(CJSON)/cJSON.c | $(BUILD)
 	$(CC) -std=gnu17 -g -O1 $(SAN) -c -o $@ $<
 
-$(BUILD)/test_settings: test_settings.c $(MAIN)/settings.c stubs/stubs.c $(BUILD)/cJSON.o \
+$(BUILD)/test_settings: test_settings.c $(MAIN)/settings.c $(MAIN)/storage.c stubs/stubs.c $(BUILD)/cJSON.o \
                         $(wildcard stubs/*.h stubs/*/*.h) test.h $(MAIN)/settings.h $(MAIN)/storage.h | $(BUILD)
-	$(CC) $(CFLAGS) $(INCLUDE) $(WRAP) -o $@ test_settings.c $(MAIN)/settings.c stubs/stubs.c $(BUILD)/cJSON.o -lm
+	$(CC) $(CFLAGS) $(INCLUDE) $(WRAP) -o $@ test_settings.c $(MAIN)/settings.c $(MAIN)/storage.c \
+	      stubs/stubs.c $(BUILD)/cJSON.o -lm
 
 $(BUILD):
 	@test -f $(CJSON)/cJSON.c || { echo "cJSON not found: run idf.py reconfigure once"; exit 1; }

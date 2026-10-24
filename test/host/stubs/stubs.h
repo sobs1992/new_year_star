@@ -11,5 +11,6 @@ const char *stub_nvs_get(const char *ns, const char *key);
 extern int stub_nvs_writes;
 
 /* Directory listing of STORAGE_BASE_PATH (opendir / readdir are wrapped at link time).
- * A name ending in '/' is a directory. Without a call the directory cannot be opened. */
+ * A name ending in '/' is a directory. Without a call the directory cannot be opened.
+ * stat() gives every file in it 100000 bytes plus the length of its name. */
 void stub_storage_files(const char *const *names, size_t count);

@@ -1,11 +1,9 @@
 #include <ctype.h>
-#include <dirent.h>
 #include <stdatomic.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <strings.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "nvs.h"
@@ -534,40 +532,21 @@ static char *load(void)
     return json;
 }
 
-static bool is_mp3_name(const char *name)
-{
-    size_t len = strlen(name);
-    return name[0] != '.' && len > 4 && len < TRACK_NAME_SIZE && strcasecmp(name + len - 4, ".mp3") == 0;
-}
-
 static int compare_tracks(const void *a, const void *b)
 {
     return strcmp(((const track_entry_t *)a)->name, ((const track_entry_t *)b)->name);
 }
 
-/* Fill cur.tracks from the files in storage, with default settings */
-static void scan_tracks(void)
+/* A file found in storage: into cur.tracks with default settings */
+static void add_found_track(const char *name, void *ctx)
 {
-    DIR *dir = opendir(STORAGE_BASE_PATH);
-    if (dir == NULL) {
-        ESP_LOGE(TAG, "Cannot open %s", STORAGE_BASE_PATH);
+    if (cur.track_count == SETTINGS_MAX_TRACKS) {
+        ESP_LOGW(TAG, "More than %d tracks, ignoring %s", SETTINGS_MAX_TRACKS, name);
         return;
     }
-    struct dirent *e;
-    while ((e = readdir(dir)) != NULL) {
-        if (e->d_type != DT_REG || !is_mp3_name(e->d_name)) {
-            continue;
-        }
-        if (cur.track_count == SETTINGS_MAX_TRACKS) {
-            ESP_LOGW(TAG, "More than %d tracks, ignoring %s", SETTINGS_MAX_TRACKS, e->d_name);
-            continue;
-        }
-        track_entry_t *t = &cur.tracks[cur.track_count++];
-        strlcpy(t->name, e->d_name, sizeof(t->name));
-        set_defaults(&TRACK_GROUP, &t->cfg);
-    }
-    closedir(dir);
-    qsort(cur.tracks, cur.track_count, sizeof(cur.tracks[0]), compare_tracks);
+    track_entry_t *t = &cur.tracks[cur.track_count++];
+    strlcpy(t->name, name, sizeof(t->name));
+    set_defaults(&TRACK_GROUP, &t->cfg);
 }
 
 void settings_init(void)
@@ -576,7 +555,8 @@ void settings_init(void)
     assert(lock);
     revision = esp_random();
 
-    scan_tracks();
+    storage_for_each_track(add_found_track, NULL);
+    qsort(cur.tracks, cur.track_count, sizeof(cur.tracks[0]), compare_tracks);
     set_defaults(&LED_GROUP, &cur.led);
     for (int m = 0; m < PLAYER_MODE_COUNT; m++) {
         set_defaults(&LIGHT_GROUP, &cur.led.light[m]);
@@ -748,11 +728,6 @@ uint32_t settings_revision(void)
     uint32_t rev = revision;
     xSemaphoreGive(lock);
     return rev;
-}
-
-bool settings_is_track_name(const char *name)
-{
-    return is_mp3_name(name);
 }
 
 char *settings_to_json(bool for_ui)

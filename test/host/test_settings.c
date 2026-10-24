@@ -1,4 +1,5 @@
-/* settings.c: defaults, loading what earlier firmware saved, validation, revisions */
+/* settings.c with storage.c: defaults, loading what earlier firmware saved, validation,
+ * revisions, the track list */
 
 #include "cJSON.h"
 #include "settings.h"
@@ -540,14 +541,14 @@ static void tracks_are_added_and_removed(void)
 
 static void track_names(void)
 {
-    CHECK(settings_is_track_name("a.mp3"));
-    CHECK(settings_is_track_name("Новый год.MP3"));
-    CHECK(settings_is_track_name("12345678901234567890123456789012345678901234567890123456789.mp3")); /* 63 */
-    CHECK(!settings_is_track_name("123456789012345678901234567890123456789012345678901234567890.mp3")); /* 64 */
-    CHECK(!settings_is_track_name(".a.mp3"));
-    CHECK(!settings_is_track_name(".mp3"));
-    CHECK(!settings_is_track_name("a.wav"));
-    CHECK(!settings_is_track_name("a.mp3.part"));
+    CHECK(storage_is_track_name("a.mp3"));
+    CHECK(storage_is_track_name("Новый год.MP3"));
+    CHECK(storage_is_track_name("12345678901234567890123456789012345678901234567890123456789.mp3")); /* 63 */
+    CHECK(!storage_is_track_name("123456789012345678901234567890123456789012345678901234567890.mp3")); /* 64 */
+    CHECK(!storage_is_track_name(".a.mp3"));
+    CHECK(!storage_is_track_name(".mp3"));
+    CHECK(!storage_is_track_name("a.wav"));
+    CHECK(!storage_is_track_name("a.mp3.part"));
 }
 
 int main(void)
