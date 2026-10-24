@@ -19,6 +19,7 @@
 #include "settings.h"
 #include "status.h"
 #include "storage.h"
+#include "sysinfo.h"
 #include "web.h"
 #include "wifi.h"
 
@@ -29,6 +30,8 @@
 
 extern const char index_html_start[] asm("_binary_index_html_start");
 extern const char index_html_end[] asm("_binary_index_html_end");
+extern const char system_html_start[] asm("_binary_system_html_start");
+extern const char system_html_end[] asm("_binary_system_html_end");
 
 static const char *TAG = "web";
 
@@ -37,6 +40,13 @@ static esp_err_t index_get(httpd_req_t *req)
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     return httpd_resp_send(req, index_html_start, index_html_end - index_html_start);
+}
+
+static esp_err_t system_page_get(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "text/html; charset=utf-8");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    return httpd_resp_send(req, system_html_start, system_html_end - system_html_start);
 }
 
 static esp_err_t send_json(httpd_req_t *req, const char *status, const char *json)
@@ -472,6 +482,18 @@ static esp_err_t wifi_scan_get(httpd_req_t *req)
     return ret;
 }
 
+/* System page data: CPU load, memory, temperature */
+static esp_err_t system_get(httpd_req_t *req)
+{
+    char *json = sysinfo_json();
+    if (json == NULL) {
+        return httpd_resp_send_500(req);
+    }
+    esp_err_t ret = send_json(req, "200 OK", json);
+    free(json);
+    return ret;
+}
+
 /* Any unknown URL (phone connectivity checks included) goes to the settings page */
 static esp_err_t redirect_to_portal(httpd_req_t *req, httpd_err_code_t err)
 {
@@ -488,7 +510,7 @@ static httpd_handle_t http_start(void)
 {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.max_open_sockets = 16;
-    cfg.max_uri_handlers = 24; /* 10 here, DLNA 4, Spotify 2 */
+    cfg.max_uri_handlers = 24; /* 12 here, DLNA 4, Spotify 2 */
     cfg.uri_match_fn = httpd_uri_match_wildcard; /* /dlna/... handlers */
     cfg.stack_size = 6144;
     cfg.lru_purge_enable = true;
@@ -507,6 +529,8 @@ static httpd_handle_t http_start(void)
         { .uri = "/api/wifi/ap", .method = HTTP_POST, .handler = wifi_ap_post },
         { .uri = "/api/player", .method = HTTP_POST, .handler = player_post },
         { .uri = "/api/wifi/scan", .method = HTTP_GET, .handler = wifi_scan_get },
+        { .uri = "/system", .method = HTTP_GET, .handler = system_page_get },
+        { .uri = "/api/system", .method = HTTP_GET, .handler = system_get },
     };
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
         ESP_ERROR_CHECK(httpd_register_uri_handler(server, &uris[i]));
@@ -522,6 +546,7 @@ void web_start(void)
     esp_log_level_set("httpd_txrx", ESP_LOG_ERROR);
     esp_log_level_set("httpd_parse", ESP_LOG_ERROR);
 
+    sysinfo_start();
     httpd_handle_t server = http_start();
     dlna_start(server);
     airplay_start();

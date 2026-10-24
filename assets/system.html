@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Звезда: система</title>
+<style>
+  :root {
+    --bg: #0e1014;
+    --card: #171a21;
+    --line: #262b35;
+    --text: #e9eaee;
+    --muted: #9298a3;
+    --accent: #e5393a;
+    --ok: #3fb67a;
+    --warn: #e0a030;
+    --field: #0e1014;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f3f4f6;
+      --card: #ffffff;
+      --line: #e1e4e9;
+      --text: #1b1d22;
+      --muted: #646a74;
+      --field: #f7f8fa;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 720px; margin: 0 auto; padding: 16px 16px 40px; }
+  header { display: flex; align-items: center; gap: 12px; margin: 4px 0 12px; }
+  header svg { flex: none; }
+  h1 { font-size: 22px; margin: 0; flex: 1; }
+  header a { color: var(--muted); text-decoration: none; font-size: 15px; }
+  header a:hover { color: var(--text); }
+  section {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 16px;
+    margin-bottom: 16px;
+  }
+  h2 { font-size: 17px; margin: 0 0 12px; }
+  .hint { color: var(--muted); font-size: 13px; margin: 0; }
+  .num { font-variant-numeric: tabular-nums; }
+
+  .tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+  @media (max-width: 560px) { .tiles { grid-template-columns: 1fr 1fr; } }
+  .tile { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; min-width: 0; }
+  .tile .label { color: var(--muted); font-size: 13px; }
+  .tile .value { font-size: 26px; font-weight: 600; margin: 2px 0; white-space: nowrap; }
+  .tile .sub { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .meter { height: 8px; border-radius: 4px; background: var(--field); border: 1px solid var(--line); overflow: hidden; margin: 6px 0; }
+  .meter > div { height: 100%; width: 0; background: var(--ok); transition: width .4s; }
+  .meter.warn > div { background: var(--warn); }
+  .meter.bad > div { background: var(--accent); }
+
+  .mem + .mem { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+  .mem .head { display: flex; justify-content: space-between; gap: 12px; font-weight: 600; }
+  .facts { display: grid; grid-template-columns: auto 1fr; gap: 4px 16px; font-size: 14px; margin: 0; }
+  .facts dt { color: var(--muted); }
+  .facts dd { margin: 0; text-align: right; }
+
+  .table-wrap { overflow-x: auto; margin: 0 -4px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { padding: 6px 4px; text-align: right; white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: 500; border-bottom: 1px solid var(--line); cursor: pointer; user-select: none; }
+  th.sorted::after { content: " ↓"; }
+  tr + tr td { border-top: 1px solid var(--line); }
+  td .bar { display: inline-block; vertical-align: middle; height: 6px; border-radius: 3px; background: var(--ok); margin-right: 6px; }
+  .low { color: var(--accent); font-weight: 600; }
+  .tag { color: var(--muted); font-size: 12px; }
+  #error { color: var(--accent); margin: 0 0 12px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <svg width="32" height="32" viewBox="0 0 24 24" aria-hidden="true">
+      <path fill="#e5393a" d="M12 2l2.9 6.6 7.1.6-5.4 4.7 1.6 7L12 17.3 5.8 21l1.6-7L2 9.2l7.1-.6z"/>
+    </svg>
+    <h1>Система</h1>
+    <a href="/">← Настройки</a>
+  </header>
+  <p id="error" hidden></p>
+
+  <div class="tiles">
+    <div class="tile">
+      <div class="label">Процессор</div>
+      <div class="value num" id="cpu">—</div>
+      <div class="meter" id="cpu-meter"><div></div></div>
+    </div>
+    <div class="tile">
+      <div class="label">Температура чипа</div>
+      <div class="value num" id="temp">—</div>
+      <div class="sub">встроенный датчик</div>
+    </div>
+    <div class="tile">
+      <div class="label">RAM свободно</div>
+      <div class="value num" id="ram-tile">—</div>
+      <div class="sub num" id="ram-tile-sub"></div>
+    </div>
+    <div class="tile">
+      <div class="label">PSRAM свободно</div>
+      <div class="value num" id="psram-tile">—</div>
+      <div class="sub num" id="psram-tile-sub"></div>
+    </div>
+  </div>
+
+  <section>
+    <h2>Память</h2>
+    <div class="mem">
+      <div class="head"><span>Внутренняя RAM</span><span class="num" id="ram-used"></span></div>
+      <div class="meter" id="ram-meter"><div></div></div>
+      <dl class="facts num">
+        <dt>Свободно</dt><dd id="ram-free"></dd>
+        <dt>Минимум с запуска</dt><dd id="ram-min"></dd>
+        <dt>Крупнейший блок</dt><dd id="ram-largest"></dd>
+        <dt>Крупнейший блок для DMA</dt><dd id="ram-dma"></dd>
+      </dl>
+    </div>
+    <div class="mem">
+      <div class="head"><span>PSRAM</span><span class="num" id="psram-used"></span></div>
+      <div class="meter" id="psram-meter"><div></div></div>
+      <dl class="facts num">
+        <dt>Свободно</dt><dd id="psram-free"></dd>
+        <dt>Минимум с запуска</dt><dd id="psram-min"></dd>
+        <dt>Крупнейший блок</dt><dd id="psram-largest"></dd>
+      </dl>
+    </div>
+    <p class="hint" style="margin-top:14px">Внутренней RAM мало, и её первой не хватает: Wi-Fi и звук (DMA) работают только с ней.
+      Если «минимум с запуска» опускается ниже 10 КБ, звезда может перезагрузиться.</p>
+  </section>
+
+  <section>
+    <h2>Задачи</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th data-sort="name">Задача</th>
+          <th data-sort="cpu" class="sorted">CPU</th>
+          <th data-sort="priority">Приоритет</th>
+          <th data-sort="stack_free">Запас стека</th>
+        </tr></thead>
+        <tbody id="tasks"></tbody>
+      </table>
+    </div>
+    <p class="hint" id="window" style="margin-top:10px"></p>
+  </section>
+
+  <section>
+    <h2>Прошивка и чип</h2>
+    <dl class="facts num" id="about"></dl>
+  </section>
+</main>
+
+<script>
+(() => {
+  'use strict';
+
+  const POLL_MS = 2000;
+  const LOW_STACK = 512; /* bytes: a task this close to its stack end may crash */
+  const RESETS = {
+    power_on: 'включение питания', software: 'программный перезапуск', panic: 'сбой (panic)',
+    watchdog: 'сторожевой таймер', brownout: 'просадка питания', deep_sleep: 'выход из сна',
+    external: 'кнопка сброса', usb: 'по USB', jtag: 'по JTAG', other: 'другая',
+  };
+  let sortKey = 'cpu';
+  let timer;
+
+  const $ = id => document.getElementById(id);
+
+  function el(tag, props, ...children) {
+    const node = document.createElement(tag);
+    Object.assign(node, props);
+    node.append(...children);
+    return node;
+  }
+
+  function decimal(v, digits) {
+    return v.toFixed(digits).replace('.', ',');
+  }
+
+  function size(bytes) {
+    if (bytes < 1024) return bytes + ' Б';
+    if (bytes < 1024 * 1024) return decimal(bytes / 1024, bytes < 10 * 1024 ? 1 : 0) + ' КБ';
+    return decimal(bytes / 1024 / 1024, 1) + ' МБ';
+  }
+
+  function uptime(s) {
+    const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+    if (d) return d + ' д ' + h + ' ч ' + m + ' мин';
+    if (h) return h + ' ч ' + m + ' мин';
+    return m + ' мин ' + (s % 60) + ' с';
+  }
+
+  /* fraction 0..1; warn / bad from the given thresholds */
+  function meter(id, fraction, warn, bad) {
+    const m = $(id);
+    m.firstElementChild.style.width = Math.min(100, fraction * 100) + '%';
+    m.className = 'meter' + (fraction >= bad ? ' bad' : fraction >= warn ? ' warn' : '');
+  }
+
+  function showMemory(prefix, h) {
+    const used = h.total - h.free;
+    $(prefix + '-used').textContent = size(used) + ' из ' + size(h.total);
+    meter(prefix + '-meter', used / h.total, 0.8, 0.9);
+    $(prefix + '-free').textContent = size(h.free);
+    $(prefix + '-min').textContent = size(h.min_free);
+    $(prefix + '-largest').textContent = size(h.largest);
+    $(prefix + '-tile').textContent = size(h.free);
+    $(prefix + '-tile-sub').textContent = 'минимум ' + size(h.min_free);
+  }
+
+  function showTasks(cpu) {
+    const tasks = cpu.tasks.slice().sort((a, b) =>
+      sortKey === 'name' ? a.name.localeCompare(b.name)
+        : sortKey === 'stack_free' ? a.stack_free - b.stack_free
+        : b[sortKey] - a[sortKey] || a.name.localeCompare(b.name));
+    const max = Math.max(1, ...tasks.map(t => t.cpu));
+    $('tasks').replaceChildren(...tasks.map(t => el('tr', {},
+      el('td', {}, t.name),
+      el('td', { className: 'num' },
+        el('span', { className: 'bar', style: 'width:' + Math.round(t.cpu / max * 40) + 'px' }),
+        decimal(t.cpu, 1) + ' %'),
+      el('td', { className: 'num', textContent: t.priority }),
+      el('td', { className: 'num' },
+        el('span', { className: t.stack_free < LOW_STACK ? 'low' : '', textContent: size(t.stack_free) }),
+        el('span', { className: 'tag', textContent: t.stack_psram ? ' PSRAM' : ' RAM' })))));
+    $('window').textContent = 'Загрузка за последние ' + decimal(cpu.window_ms / 1000, 1) +
+      ' с. Запас стека — сколько стека задача ни разу не тронула с запуска.';
+    for (const th of document.querySelectorAll('th')) {
+      th.classList.toggle('sorted', th.dataset.sort === sortKey);
+    }
+  }
+
+  function showAbout(s) {
+    const rev = Math.floor(s.chip.revision / 100) + '.' + s.chip.revision % 100;
+    const rows = [
+      ['Прошивка', s.app.version],
+      ['Собрана', s.app.built],
+      ['ESP-IDF', s.app.idf],
+      ['Чип', s.chip.model.toUpperCase().replace(/^ESP32(\w)/, 'ESP32-$1') + ', ревизия ' + rev],
+      ['Ядер, частота', s.chip.cores + ', ' + s.chip.cpu_mhz + ' МГц'],
+      ['Flash', size(s.chip.flash)],
+      ['Работает', uptime(s.uptime_s)],
+      ['Причина запуска', RESETS[s.reset_reason] || s.reset_reason],
+    ];
+    $('about').replaceChildren(...rows.flatMap(([k, v]) => [el('dt', { textContent: k }), el('dd', { textContent: v })]));
+  }
+
+  let lastTasks;
+
+  async function poll() {
+    clearTimeout(timer);
+    try {
+      const resp = await fetch('/api/system', { cache: 'no-store' });
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      const s = await resp.json();
+      $('error').hidden = true;
+
+      $('cpu').textContent = decimal(s.cpu.load, 0) + ' %';
+      meter('cpu-meter', s.cpu.load / 100, 0.7, 0.9);
+      $('temp').textContent = s.temperature_c === null ? '—' : decimal(s.temperature_c, 1) + ' °C';
+      showMemory('ram', s.ram);
+      $('ram-dma').textContent = size(s.ram.dma_largest);
+      showMemory('psram', s.psram);
+      lastTasks = s.cpu;
+      showTasks(s.cpu);
+      showAbout(s);
+    } catch (e) {
+      $('error').textContent = 'Нет связи со звездой (' + e.message + ')';
+      $('error').hidden = false;
+    }
+    if (document.visibilityState === 'visible') {
+      timer = setTimeout(poll, POLL_MS);
+    }
+  }
+
+  for (const th of document.querySelectorAll('th')) {
+    th.addEventListener('click', () => {
+      sortKey = th.dataset.sort;
+      if (lastTasks) showTasks(lastTasks);
+    });
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') poll();
+  });
+  poll();
+})();
+</script>
+</body>
+</html>

@@ -36,7 +36,9 @@
   main { max-width: 720px; margin: 0 auto; padding: 16px 16px 80px; }
   header { display: flex; align-items: center; gap: 12px; margin: 4px 0 12px; }
   header svg { flex: none; }
-  h1 { font-size: 22px; margin: 0; }
+  h1 { font-size: 22px; margin: 0; flex: 1; }
+  header a { color: var(--muted); text-decoration: none; font-size: 15px; }
+  header a:hover { color: var(--text); }
   section {
     background: var(--card);
     border: 1px solid var(--line);
@@ -187,6 +189,7 @@
       <path fill="#e5393a" d="M12 2l2.9 6.6 7.1.6-5.4 4.7 1.6 7L12 17.3 5.8 21l1.6-7L2 9.2l7.1-.6z"/>
     </svg>
     <h1>Новогодняя звезда</h1>
+    <a href="/system">Система →</a>
   </header>
 
   <section>

@@ -34,3 +34,6 @@ CONFIG_COMPILER_CXX_EXCEPTIONS=y
 # CONFIG_AUDIO_SIMPLE_DEC_OGG_SUPPORT is not set
 # .bss of Wi-Fi, lwip, libstdc++ and cspot in PSRAM: frees ~25 KB of internal RAM for DMA
 CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
+# CPU load per task for the system page (64-bit counter: the 32-bit one wraps in 71 minutes)
+CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
+CONFIG_FREERTOS_RUN_TIME_COUNTER_TYPE_U64=y
