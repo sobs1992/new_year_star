@@ -817,9 +817,16 @@ static void player_task(void *arg)
             play_radio(deadline);
             break;
         }
-        case SOURCE_PLAYLIST:
-            played = play_cycle();
+        case SOURCE_PLAYLIST: {
+            /* With the sensor, a trigger plays the playlist a set number of times */
+            sensor_settings_t ss;
+            settings_get_sensor(&ss);
+            int cycles = ss.enabled ? settings_get_playlist_cycles() : 1;
+            for (int c = 0; c < cycles && played && wanted_source() == SOURCE_PLAYLIST; c++) {
+                played = play_cycle();
+            }
             break;
+        }
         default:
             continue; /* a phone casts, or stopped meanwhile */
         }

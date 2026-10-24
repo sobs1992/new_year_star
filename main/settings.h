@@ -60,6 +60,10 @@ typedef struct {
     uint16_t cooldown_s;  /* from the end of a cycle to the next trigger */
 } sensor_settings_t;
 
+typedef struct {
+    uint8_t sensor_cycles; /* passes over the playlist after a sensor trigger */
+} playlist_settings_t;
+
 #define RADIO_MAX_STATIONS  16
 #define RADIO_NAME_SIZE     48
 #define RADIO_URL_SIZE      256
@@ -114,6 +118,7 @@ uint32_t settings_radar_version(void);
 void settings_get_cast(cast_settings_t *out);
 
 player_mode_t settings_get_mode(void);
+uint8_t settings_get_playlist_cycles(void);
 /* false when no station is selected */
 bool settings_get_current_station(radio_station_t *out);
 uint8_t settings_get_radio_volume(void);

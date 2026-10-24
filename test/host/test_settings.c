@@ -36,6 +36,7 @@ static const char FULL[] =
         "\"playlist\":{\"enabled\":true,\"trigger\":\"presence\",\"max_gate\":3,\"sensitivity\":10,\"cooldown_s\":20},"
         "\"radio\":{\"enabled\":false,\"trigger\":\"motion\",\"max_gate\":8,\"sensitivity\":90,\"cooldown_s\":600}},"
     "\"mode\":\"radio\","
+    "\"playlist\":{\"sensor_cycles\":4},"
     "\"radio\":{\"stations\":["
         "{\"name\":\"One\",\"url\":\"http://one.example/stream\"},"
         "{\"name\":\"Two\",\"url\":\"https://two.example/list.m3u\"}],"
@@ -168,6 +169,7 @@ static void defaults_without_saved_settings(void)
     CHECK_JSON(s, "led", "{\"count\":24,\"playlist\":" DEFAULT_LIGHT ",\"radio\":" DEFAULT_LIGHT "}");
     CHECK_JSON(s, "sensor", "{\"playlist\":" DEFAULT_SENSOR ",\"radio\":" DEFAULT_SENSOR "}");
     CHECK_JSON(s, "mode", "\"playlist\"");
+    CHECK_JSON(s, "playlist", "{\"sensor_cycles\":1}");
     CHECK_EQ_INT(cJSON_GetArraySize(at(s, "radio.stations")), 11);
     CHECK_JSON(s, "radio.stations.0",
                "{\"name\":\"SomaFM Christmas Lounge\",\"url\":\"https://ice6.somafm.com/christmas-128-mp3\"}");
@@ -175,7 +177,7 @@ static void defaults_without_saved_settings(void)
     CHECK_JSON(s, "radio.volume", "50");
     CHECK_JSON(s, "radio.sensor_minutes", "5");
     CHECK_JSON(s, "cast", DEFAULT_CAST);
-    CHECK_EQ_INT(cJSON_GetArraySize(s), 6);
+    CHECK_EQ_INT(cJSON_GetArraySize(s), 7);
     CHECK_EQ_INT(stub_nvs_writes, 0);
     CHECK_EQ_INT(settings_track_count(), 3);
 }
@@ -197,6 +199,7 @@ static void saved_settings_load_unchanged(void)
     CHECK_EQ_STR(st.name, "Two");
     CHECK_EQ_INT(settings_get_radio_volume(), 150);
     CHECK_EQ_INT(settings_get_radio_minutes(), 30);
+    CHECK_EQ_INT(settings_get_playlist_cycles(), 4);
     led_settings_t led;
     settings_get_led(&led);
     CHECK_EQ_INT(led.count, 100);
@@ -235,6 +238,7 @@ static void legacy_flat_led_applies_to_both_modes(void)
     /* Sections that did not exist yet */
     CHECK_JSON(s, "sensor", "{\"playlist\":" DEFAULT_SENSOR ",\"radio\":" DEFAULT_SENSOR "}");
     CHECK_JSON(s, "mode", "\"playlist\"");
+    CHECK_JSON(s, "playlist", "{\"sensor_cycles\":1}");
     CHECK_EQ_INT(cJSON_GetArraySize(at(s, "radio.stations")), 11);
     CHECK_JSON(s, "cast", DEFAULT_CAST);
     CHECK_JSON(s, "tracks", "[" DEFAULT_TRACK("a.mp3") "," DEFAULT_TRACK("b.mp3") "]");
@@ -305,6 +309,7 @@ static void post_applies_and_saves(void)
     set(doc, "led.radio.color", "\"rgb\"");
     set(doc, "sensor.playlist.cooldown_s", "99");
     set(doc, "mode", "\"radio\"");
+    set(doc, "playlist.sensor_cycles", "5");
     set(doc, "radio.current", "3");
     set(doc, "cast.dlna", "false");
     char err[96];
@@ -315,6 +320,7 @@ static void post_applies_and_saves(void)
     CHECK_JSON(s, "led.radio.color", "\"rgb\"");
     CHECK_JSON(s, "sensor.playlist.cooldown_s", "99");
     CHECK_JSON(s, "mode", "\"radio\"");
+    CHECK_JSON(s, "playlist.sensor_cycles", "5");
     CHECK_JSON(s, "radio.current", "3");
     CHECK_JSON(s, "cast.dlna", "false");
     CHECK_JSON(s, NULL, stub_nvs_get(NVS_NS, NVS_KEY));
@@ -383,6 +389,8 @@ static void post_rejects_invalid_values(void)
         { "sensor.radio.max_gate", "9", "radio: max_gate" },
         { "sensor.radio.enabled", NULL, "radio: enabled" },
         { "mode", "\"tv\"", "mode" },
+        { "playlist.sensor_cycles", "0", "sensor_cycles" },
+        { "playlist.sensor_cycles", "100", "sensor_cycles" },
         { "radio.volume", "-1", "volume" },
         { "radio.sensor_minutes", "0", "sensor_minutes" },
         { "radio.stations", "\"none\"", "stations" },
@@ -471,13 +479,14 @@ static void ui_json_has_limits_and_extras(void)
     CHECK_JSON(ui, "limits.light", "{\"min_brightness\":[0,255],\"max_brightness\":[0,255],\"idle_brightness\":[0,255],"
                                    "\"attack_ms\":[1,1000],\"release_ms\":[10,5000],\"gain_halflife_ms\":[100,30000]}");
     CHECK_JSON(ui, "limits.sensor", "{\"max_gate\":[2,8],\"sensitivity\":[0,100],\"cooldown_s\":[0,600]}");
+    CHECK_JSON(ui, "limits.playlist", "{\"sensor_cycles\":[1,99]}");
     CHECK_JSON(ui, "limits.radio", "{\"volume\":[0,200],\"sensor_minutes\":[1,240]}");
     CHECK_JSON(ui, "limits.max_stations", "16");
     CHECK_JSON(ui, "limits.max_station_name_bytes", "47");
     CHECK_JSON(ui, "limits.max_url_bytes", "255");
     CHECK_JSON(ui, "limits.max_tracks", "32");
     CHECK_JSON(ui, "limits.max_name_bytes", "63");
-    CHECK_EQ_INT(cJSON_GetArraySize(at(ui, "limits")), 10);
+    CHECK_EQ_INT(cJSON_GetArraySize(at(ui, "limits")), 11);
     CHECK_EQ_INT(cJSON_GetArraySize(at(ui, "station_presets")), 11);
     CHECK_JSON(ui, "storage", "{\"total\":5242880,\"used\":1048576,\"upload_max\":4161536}");
 }

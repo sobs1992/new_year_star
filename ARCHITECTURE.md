@@ -56,8 +56,8 @@ All application code is in `main/`: playback in `main/player/`, Wi-Fi and the HT
    afterwards plays all the same.
 3. The player mode: the playlist (enabled tracks with repeats and pauses) or the radio.
 
-The sensor decides *when* the own mode starts (`wait_for_trigger()`): with it enabled, one
-playlist pass or a set number of radio minutes per trigger, then a cooldown. Every playback
+The sensor decides *when* the own mode starts (`wait_for_trigger()`): with it enabled, a set
+number of playlist passes or radio minutes per trigger, then a cooldown. Every playback
 loop asks `wanted_source()` before each frame and stops once its source is not wanted, so
 settings, the stop button and casts take effect within a frame.
 

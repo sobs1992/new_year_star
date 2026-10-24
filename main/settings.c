@@ -30,6 +30,7 @@ typedef struct {
     led_settings_t led;
     sensor_settings_t sensor[PLAYER_MODE_COUNT]; /* by player_mode_t */
     player_mode_t mode;
+    playlist_settings_t playlist;
     radio_settings_t radio;
     cast_settings_t cast;
 } all_settings_t;
@@ -143,6 +144,10 @@ static const field_t SENSOR_FIELDS[] = {
     F_INT(sensor_settings_t, cooldown_s, 0, 600, 30),
 };
 
+static const field_t PLAYLIST_FIELDS[] = {
+    F_INT(playlist_settings_t, sensor_cycles, 1, 99, 1),
+};
+
 /* Plus the stations and the current one, see parse_radio() */
 static const field_t RADIO_FIELDS[] = {
     F_INT(radio_settings_t, volume, 0, 200, 50),
@@ -174,6 +179,7 @@ static const group_t TRACK_GROUP = GROUP(TRACK_FIELDS, NULL);
 static const group_t LED_GROUP = GROUP(LED_FIELDS, NULL);
 static const group_t LIGHT_GROUP = GROUP(LIGHT_FIELDS, check_light);
 static const group_t SENSOR_GROUP = GROUP(SENSOR_FIELDS, NULL);
+static const group_t PLAYLIST_GROUP = GROUP(PLAYLIST_FIELDS, NULL);
 static const group_t RADIO_GROUP = GROUP(RADIO_FIELDS, NULL);
 static const group_t CAST_GROUP = GROUP(CAST_FIELDS, NULL);
 static const group_t ROOT_GROUP = GROUP(ROOT_FIELDS, NULL);
@@ -430,9 +436,9 @@ static bool parse_radio(const cJSON *jr, radio_settings_t *r, char *err, size_t 
 }
 
 /* Parse into the given copy. Tracks are matched by name: unknown names are skipped (file
- * deleted), tracks missing from the JSON keep their values. "sensor", "radio", "mode" and
- * "cast" are optional so settings saved before they existed still load. revision (may be NULL)
- * gets the document's "revision", -1 when it has none. */
+ * deleted), tracks missing from the JSON keep their values. "sensor", "playlist", "radio",
+ * "mode" and "cast" are optional so settings saved before they existed still load. revision
+ * (may be NULL) gets the document's "revision", -1 when it has none. */
 static bool parse(const char *json, all_settings_t *s, double *revision, char *err, size_t err_len)
 {
     cJSON *root = cJSON_Parse(json);
@@ -449,6 +455,7 @@ static bool parse(const char *json, all_settings_t *s, double *revision, char *e
     const cJSON *jtracks = cJSON_GetObjectItemCaseSensitive(root, "tracks");
     const cJSON *jled = cJSON_GetObjectItemCaseSensitive(root, "led");
     const cJSON *jsensor = cJSON_GetObjectItemCaseSensitive(root, "sensor");
+    const cJSON *jplaylist = cJSON_GetObjectItemCaseSensitive(root, "playlist");
     const cJSON *jradio = cJSON_GetObjectItemCaseSensitive(root, "radio");
     const cJSON *jcast = cJSON_GetObjectItemCaseSensitive(root, "cast");
     if (!cJSON_IsArray(jtracks) || !cJSON_IsObject(jled)) {
@@ -478,6 +485,7 @@ static bool parse(const char *json, all_settings_t *s, double *revision, char *e
                        err, err_len) &&
          (!jsensor || read_per_mode(jsensor, "enabled", &SENSOR_GROUP, s->sensor, sizeof(s->sensor[0]),
                                     err, err_len)) &&
+         (!jplaylist || read_group(jplaylist, &PLAYLIST_GROUP, &s->playlist, err, err_len)) &&
          (!jradio || parse_radio(jradio, &s->radio, err, err_len)) &&
          (!jcast || parse_cast(jcast, &s->cast, err, err_len)) &&
          read_group(root, &ROOT_GROUP, s, err, err_len);
@@ -569,6 +577,7 @@ void settings_init(void)
         set_defaults(&SENSOR_GROUP, &cur.sensor[m]);
     }
     set_defaults(&ROOT_GROUP, &cur);
+    set_defaults(&PLAYLIST_GROUP, &cur.playlist);
     set_defaults(&RADIO_GROUP, &cur.radio);
     memcpy(cur.radio.stations, STATION_PRESETS, sizeof(STATION_PRESETS));
     cur.radio.station_count = ARRAY_SIZE(STATION_PRESETS);
@@ -701,6 +710,14 @@ player_mode_t settings_get_mode(void)
     return mode;
 }
 
+uint8_t settings_get_playlist_cycles(void)
+{
+    xSemaphoreTake(lock, portMAX_DELAY);
+    uint8_t cycles = cur.playlist.sensor_cycles;
+    xSemaphoreGive(lock);
+    return cycles;
+}
+
 bool settings_get_current_station(radio_station_t *out)
 {
     xSemaphoreTake(lock, portMAX_DELAY);
@@ -761,6 +778,7 @@ char *settings_to_json(bool for_ui)
     write_per_mode(jled, &LIGHT_GROUP, cur.led.light, sizeof(cur.led.light[0]));
     write_per_mode(cJSON_AddObjectToObject(root, "sensor"), &SENSOR_GROUP, cur.sensor, sizeof(cur.sensor[0]));
     write_group(root, &ROOT_GROUP, &cur);
+    write_group(cJSON_AddObjectToObject(root, "playlist"), &PLAYLIST_GROUP, &cur.playlist);
 
     cJSON *jradio = cJSON_AddObjectToObject(root, "radio");
     cJSON *jstations = cJSON_AddArrayToObject(jradio, "stations");
@@ -790,6 +808,7 @@ char *settings_to_json(bool for_ui)
         add_limits(jlimits, "led", &LED_GROUP);
         add_limits(jlimits, "light", &LIGHT_GROUP);
         add_limits(jlimits, "sensor", &SENSOR_GROUP);
+        add_limits(jlimits, "playlist", &PLAYLIST_GROUP);
         add_limits(jlimits, "radio", &RADIO_GROUP);
         cJSON_AddNumberToObject(jlimits, "max_stations", RADIO_MAX_STATIONS);
         cJSON_AddNumberToObject(jlimits, "max_station_name_bytes", RADIO_NAME_SIZE - 1);
@@ -852,6 +871,7 @@ esp_err_t settings_from_json(const char *json, char *err, size_t err_len)
     cur.led = s.led;
     memcpy(cur.sensor, s.sensor, sizeof(cur.sensor));
     cur.mode = s.mode;
+    cur.playlist = s.playlist;
     cur.radio = s.radio;
     cur.cast = s.cast;
     xSemaphoreGive(lock);

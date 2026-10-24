@@ -233,6 +233,13 @@
   </section>
 
   <section>
+    <h2 id="sensor-title">Датчик движения</h2>
+    <p class="hint" id="sensor-hint"></p>
+    <div class="live"><span class="dot" id="sensor-dot"></span><span id="sensor-live">—</span></div>
+    <div id="sensor"></div>
+  </section>
+
+  <section>
     <h2 id="light-title">Цветомузыка</h2>
     <p class="hint" id="light-hint"></p>
     <div class="segmented" id="color">
@@ -242,13 +249,6 @@
       <label><input type="radio" name="color" value="rgb"><span><i class="swatch" style="background:conic-gradient(#e5393a,#3fb67a,#3b7ddd,#e5393a)"></i>RGB</span></label>
     </div>
     <div id="light-fields"></div>
-  </section>
-
-  <section>
-    <h2 id="sensor-title">Датчик движения</h2>
-    <p class="hint" id="sensor-hint"></p>
-    <div class="live"><span class="dot" id="sensor-dot"></span><span id="sensor-live">—</span></div>
-    <div id="sensor"></div>
   </section>
 
   <section>
@@ -331,6 +331,9 @@
   const RADIO_FIELDS = [
     { key: 'volume', label: 'Громкость, %', step: 1,
       hint: 'Выше 100% может искажать громкие места' },
+  ];
+  const PLAYLIST_SENSOR_FIELDS = [
+    { key: 'sensor_cycles', label: 'Сколько раз проиграть плейлист после срабатывания', step: 1, number: true },
   ];
   const RADIO_SENSOR_FIELDS = [
     { key: 'sensor_minutes', label: 'Сколько играть радио после срабатывания, мин', step: 1 },
@@ -473,26 +476,32 @@
     return el('label', { className: 'check' }, box, el('span', { textContent: label }));
   }
 
-  /* Sliders for the fields of values; limits holds [min, max] per key. Returns them by key. */
+  /* Sliders (number boxes for fields with number: true) for the fields of values; limits holds
+   * [min, max] per key. Returns them by key. */
   function renderFields(root, values, limits, fields, onChange) {
-    const sliders = {};
+    const controls = {};
     for (const f of fields) {
       const [min, max] = limits[f.key];
-      const s = slider(values[f.key], min, max, f.step, v => {
+      const change = v => {
         values[f.key] = v;
         if (onChange) {
           onChange(f.key);
         }
         scheduleSave();
-      }, f.format);
-      sliders[f.key] = s;
-      const block = el('div', { className: 'setting' }, el('div', { className: 'field' }, f.label), s);
+      };
+      const control = f.number ? numberInput(values[f.key], min, max, f.step, change)
+                               : slider(values[f.key], min, max, f.step, change, f.format);
+      controls[f.key] = control;
+      /* A number box goes into its label, like the other boxes; a slider under it */
+      const block = f.number
+        ? el('div', { className: 'setting' }, el('label', { className: 'field' }, f.label, control))
+        : el('div', { className: 'setting' }, el('div', { className: 'field' }, f.label), control);
       if (f.hint) {
         block.append(el('small', { textContent: f.hint }));
       }
       root.append(block);
     }
-    return sliders;
+    return controls;
   }
 
   /* Radio buttons of a segmented control bound to obj[key] */
@@ -552,9 +561,9 @@
         el('label', { className: 'field' }, 'Повторов подряд',
           numberInput(t.repeat, lim.repeat[0], lim.repeat[1], 1,
             v => { t.repeat = v; scheduleSave(); })),
-        el('label', { className: 'field' }, 'Пауза в конце, с',
-          numberInput(t.pause_ms / 1000, lim.pause_ms[0] / 1000, lim.pause_ms[1] / 1000, 0.1,
-            v => { t.pause_ms = Math.round(v * 1000); scheduleSave(); })),
+        el('label', { className: 'field' }, 'Пауза в конце, мс',
+          numberInput(t.pause_ms, lim.pause_ms[0], lim.pause_ms[1], 1,
+            v => { t.pause_ms = Math.round(v); scheduleSave(); })),
         el('div', { className: 'field wide' }, 'Громкость, %',
           slider(t.volume, lim.volume[0], lim.volume[1], 1,
             v => { t.volume = v; scheduleSave(); })),
@@ -783,7 +792,7 @@
       radio ? 'Датчик движения для радио' : 'Датчик движения для плейлиста';
     document.getElementById('sensor-hint').textContent = 'Радар 24 ГГц на выводах D2/D3. ' +
       (radio ? 'Когда включён, после срабатывания радио играет заданное время.'
-             : 'Когда включён, после срабатывания плейлист проигрывается один раз.');
+             : 'Когда включён, после срабатывания плейлист проигрывается заданное число раз.');
     root.textContent = '';
     root.append(checkbox('Запускать по датчику', sensor.enabled, on => {
       sensor.enabled = on;
@@ -808,6 +817,8 @@
     renderFields(root, sensor, settings.limits.sensor, SENSOR_FIELDS);
     if (radio) {
       renderFields(root, settings.radio, settings.limits.radio, RADIO_SENSOR_FIELDS);
+    } else {
+      renderFields(root, settings.playlist, settings.limits.playlist, PLAYLIST_SENSOR_FIELDS);
     }
   }
 
