@@ -4,3 +4,5 @@ sdkconfig.old
 # Bundled tracks are not published: put your own MP3s here before "idf.py storage-flash"
 assets/tracks/*
 !assets/tracks/.gitkeep
+# Datasheets of the parts: kept locally, not published
+docs/
