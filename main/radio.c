@@ -317,6 +317,15 @@ static const char *stream(const char *start_url, const char *mime_hint, uint32_t
     return "Слишком много вложенных плейлистов";
 }
 
+/* A notification can be left over from an earlier radio_play(): only a new generation counts,
+ * otherwise a finished file would be downloaded again right away */
+static void wait_for_new_request(uint32_t gen)
+{
+    while (!changed(gen)) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    }
+}
+
 static void radio_task(void *arg)
 {
     for (;;) {
@@ -357,7 +366,7 @@ static void radio_task(void *arg)
                 radio_status_t st;
                 radio_get_status(&st);
                 set_status(gen, RADIO_ENDED, st.codec, NULL);
-                ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+                wait_for_new_request(gen);
                 break;
             }
             ESP_LOGW(TAG, "%s: %s", url, error ? error : "stopped");
@@ -365,7 +374,7 @@ static void radio_task(void *arg)
             radio_get_status(&st);
             set_status(gen, RADIO_ERROR, st.codec, error);
             if (!live) {
-                ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+                wait_for_new_request(gen);
                 break;
             }
             ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(RETRY_MS));

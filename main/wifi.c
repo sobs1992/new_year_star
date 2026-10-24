@@ -185,6 +185,10 @@ void wifi_start(void)
         strlcpy(status.ssid, (const char *)sta.sta.ssid, sizeof(status.ssid));
     }
     ESP_ERROR_CHECK(esp_wifi_start());
+    /* Mains powered: no modem sleep. With it the radio wakes only at the router's beacons,
+     * every request waits up to ~300 ms, and DLNA apps that send a series of requests per
+     * tap feel sluggish. */
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
     start_mdns();
 
     if (status.ssid[0]) {

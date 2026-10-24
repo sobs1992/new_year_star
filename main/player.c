@@ -439,6 +439,7 @@ static size_t radio_source_read(audio_source_t *src, uint8_t *buf, size_t len)
         if (!rs->buffering) {
             ESP_LOGW(TAG, "Radio buffer ran dry, refilling");
             rs->buffering = true;
+            led_music_set_levels(0, 0, 0, 0); /* silence: let the light fade */
         }
         vTaskDelay(pdMS_TO_TICKS(20));
     }
@@ -544,6 +545,7 @@ static size_t dlna_source_read(audio_source_t *src, uint8_t *buf, size_t len)
         if (st.buffered == 0 && (st.state == RADIO_ENDED || st.state == RADIO_ERROR)) {
             return 0;
         }
+        led_music_set_levels(0, 0, 0, 0); /* paused or waiting for data: let the light fade */
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
@@ -619,6 +621,8 @@ static void play_airplay(void)
         size_t frames = airplay_read(pcm, 352, 100);
         if (frames) {
             play_pcm(pcm, frames * 2 * sizeof(int16_t), cast_gain(airplay_volume()), 2);
+        } else {
+            led_music_set_levels(0, 0, 0, 0); /* paused on the phone: let the light fade */
         }
     }
     led_music_set_levels(0, 0, 0, 0);
