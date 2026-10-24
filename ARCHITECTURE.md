@@ -21,23 +21,24 @@ Partitions (`partitions.csv`): NVS, the app (2.5 MB, ~13 % free) and LittleFS wi
 
 ## Modules
 
-All application code is in `main/`; `components/` holds the vendored cspot (Spotify) and the
-captive portal DNS server. `app_main()` in `new_year_star.c` starts the modules in order.
+All application code is in `main/`: playback in `main/player/`, the rest at the top level.
+`components/` holds the vendored cspot (Spotify) and the captive portal DNS server.
+`app_main()` in `new_year_star.c` starts the modules in order.
 
 | Module | What it does |
 |---|---|
 | `storage` | LittleFS at `/tracks`: mounting, paths, free space, what a track file is |
 | `settings` | All user settings: one JSON document in NVS, validated, versioned |
 | `tracks` | Uploading and deleting track files (file + entry in the settings) |
-| `player` | Decides what plays and plays it: decoders, volume, I2S output |
-| `stream` | HTTP(S) download of a stream or file into a PSRAM ring (radio and DLNA); the formats |
+| `player/player` | Decides what plays and plays it: decoders, volume, I2S output |
+| `player/stream` | HTTP(S) download of a stream or file into a PSRAM ring (radio and DLNA); the formats |
+| `player/dlna` | UPnP media renderer: SSDP, SOAP control, GENA events |
+| `player/airplay` | AirPlay 1 (RAOP) receiver: RTSP, RTP, ALAC, jitter buffer |
+| `player/spotify` | Spotify Connect over cspot: zeroconf login, decoded audio ring |
 | `led_music` | The LED strip: light music from the audio levels the player feeds it |
 | `sensor` | The radar on UART: target, distance, pushing gate / threshold settings |
 | `wifi` | Access point, home network, mDNS (`star.local`), scanning |
 | `web` | HTTP server: the pages (`assets/*.html`, embedded) and the JSON API |
-| `dlna` | UPnP media renderer: SSDP, SOAP control, GENA events |
-| `airplay` | AirPlay 1 (RAOP) receiver: RTSP, RTP, ALAC, jitter buffer |
-| `spotify` | Spotify Connect over cspot: zeroconf login, decoded audio ring |
 | `status` | The yellow LED on the board: blinks the code of the most basic error |
 | `button` | BOOT held 5 s: factory reset; polled by the status task |
 | `sysinfo` | `/system` page data: CPU per task, RAM, PSRAM, temperature |
