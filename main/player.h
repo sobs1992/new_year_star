@@ -26,3 +26,7 @@ void player_get_status(player_status_t *status, char track[TRACK_NAME_SIZE]);
 
 /* The file is open by the player right now */
 bool player_is_playing(const char *name);
+
+struct cJSON;
+/* "player" of /api/status */
+void player_status_json(struct cJSON *out);

@@ -13,6 +13,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "mdns.h"
+#include "cJSON.h"
 
 #include "AccessKeyFetcher.h"
 #include "BellLogger.h"
@@ -589,4 +590,31 @@ void spotify_stop(void)
         paused_at = now_ms() - PAUSE_HOLD_MS; /* let the star go silent at once */
         stop_requested = true;
     }
+}
+
+static const char *state_name(spotify_state_t s)
+{
+    switch (s) {
+    case SPOTIFY_OFF: return "off";
+    case SPOTIFY_NO_KEYS: return "no_keys";
+    case SPOTIFY_WAITING: return "waiting";
+    case SPOTIFY_CONNECTING: return "connecting";
+    case SPOTIFY_CONNECTED: return "connected";
+    case SPOTIFY_PLAYING: return "playing";
+    case SPOTIFY_PAUSED: return "paused";
+    }
+    return "unknown";
+}
+
+void spotify_status_json(cJSON *out)
+{
+    static spotify_status_t st; /* only the httpd task gets here */
+    spotify_get_status(&st);
+    cJSON_AddStringToObject(out, "state", state_name(st.state));
+    cJSON_AddBoolToObject(out, "login_failed", st.login_failed);
+    cJSON_AddBoolToObject(out, "key_failed", st.key_failed);
+    cJSON_AddStringToObject(out, "user", st.user);
+    cJSON_AddStringToObject(out, "title", st.title);
+    cJSON_AddStringToObject(out, "artist", st.artist);
+    cJSON_AddNumberToObject(out, "volume", spotify_volume());
 }

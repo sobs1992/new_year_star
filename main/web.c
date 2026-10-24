@@ -3,7 +3,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "esp_heap_caps.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_netif.h" /* dns_server.h needs its types */
@@ -55,15 +54,24 @@ static esp_err_t send_json(httpd_req_t *req, const char *status, const char *jso
     return httpd_resp_sendstr(req, json);
 }
 
+/* Send a document and delete it */
+static esp_err_t send_cjson(httpd_req_t *req, const char *status, cJSON *root)
+{
+    char *json = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (json == NULL) {
+        return httpd_resp_send_500(req);
+    }
+    esp_err_t ret = send_json(req, status, json);
+    free(json);
+    return ret;
+}
+
 static esp_err_t send_error(httpd_req_t *req, const char *status, const char *message)
 {
     cJSON *resp = cJSON_CreateObject();
     cJSON_AddStringToObject(resp, "error", message);
-    char *json = cJSON_PrintUnformatted(resp);
-    cJSON_Delete(resp);
-    esp_err_t ret = send_json(req, status, json ? json : "{}");
-    free(json);
-    return ret;
+    return send_cjson(req, status, resp);
 }
 
 static esp_err_t settings_get(httpd_req_t *req)
@@ -102,6 +110,15 @@ static char *read_body(httpd_req_t *req)
     return body;
 }
 
+/* The request body parsed, NULL when missing or not JSON; caller deletes */
+static cJSON *read_json_body(httpd_req_t *req)
+{
+    char *body = read_body(req);
+    cJSON *root = body ? cJSON_Parse(body) : NULL;
+    free(body);
+    return root;
+}
+
 static esp_err_t settings_post(httpd_req_t *req)
 {
     char *body = read_body(req);
@@ -125,140 +142,19 @@ static esp_err_t settings_post(httpd_req_t *req)
     return send_error(req, "400 Bad Request", err);
 }
 
-/* Live state for the page: what plays now and what the radar sees */
+/* Live state for the page, each part from its module */
 static esp_err_t status_get(httpd_req_t *req)
 {
-    static const char *const PLAYER_STATES[] = {
-        [PLAYER_IDLE] = "idle",
-        [PLAYER_WAITING] = "waiting",
-        [PLAYER_PLAYING] = "playing",
-        [PLAYER_PAUSE] = "pause",
-        [PLAYER_RADIO] = "radio",
-        [PLAYER_STOPPED] = "stopped",
-        [PLAYER_CAST] = "cast",
-    };
-    static const char *const TARGETS[] = {
-        [SENSOR_TARGET_NONE] = "none",
-        [SENSOR_TARGET_MOVING] = "moving",
-        [SENSOR_TARGET_STILL] = "still",
-        [SENSOR_TARGET_BOTH] = "both",
-    };
-
-    player_status_t ps;
-    char track[TRACK_NAME_SIZE];
-    player_get_status(&ps, track);
-    sensor_state_t ss;
-    sensor_get_state(&ss);
-
     cJSON *root = cJSON_CreateObject();
-    cJSON *jp = cJSON_AddObjectToObject(root, "player");
-    cJSON_AddStringToObject(jp, "state", PLAYER_STATES[ps]);
-    if (track[0]) {
-        cJSON_AddStringToObject(jp, "track", track);
-    }
-    cJSON *js = cJSON_AddObjectToObject(root, "sensor");
-    cJSON_AddBoolToObject(js, "online", ss.online);
-    cJSON_AddStringToObject(js, "target", TARGETS[ss.target]);
-    cJSON_AddNumberToObject(js, "distance_cm", ss.distance_cm);
-    cJSON_AddNumberToObject(js, "moving_cm", ss.moving_cm);
-    cJSON_AddNumberToObject(js, "still_cm", ss.still_cm);
-    cJSON_AddNumberToObject(js, "moving_energy", ss.moving_energy);
-    cJSON_AddNumberToObject(js, "still_energy", ss.still_energy);
-
-    static const char *const WIFI_STATES[] = {
-        [WIFI_STA_OFF] = "off",
-        [WIFI_STA_CONNECTING] = "connecting",
-        [WIFI_STA_CONNECTED] = "connected",
-        [WIFI_STA_FAILED] = "failed",
-    };
-    static const char *const WIFI_REASONS[] = {
-        [WIFI_FAIL_NONE] = "",
-        [WIFI_FAIL_NOT_FOUND] = "not_found",
-        [WIFI_FAIL_WRONG_PASSWORD] = "wrong_password",
-        [WIFI_FAIL_OTHER] = "other",
-    };
-    wifi_status_t ws;
-    wifi_get_status(&ws);
-    cJSON *jw = cJSON_AddObjectToObject(root, "wifi");
-    cJSON_AddStringToObject(jw, "state", WIFI_STATES[ws.state]);
-    cJSON_AddStringToObject(jw, "reason", WIFI_REASONS[ws.reason]);
-    cJSON_AddStringToObject(jw, "ssid", ws.ssid);
-    cJSON_AddStringToObject(jw, "ip", ws.ip);
-    cJSON_AddNumberToObject(jw, "rssi", ws.rssi);
-    cJSON_AddStringToObject(jw, "hostname", WIFI_HOSTNAME ".local");
-    cJSON_AddStringToObject(jw, "ap_ssid", WIFI_AP_SSID);
-    cJSON_AddBoolToObject(jw, "ap_secure", wifi_ap_secure());
-
-    static const char *const RADIO_STATES[] = {
-        [RADIO_STOPPED] = "stopped",
-        [RADIO_CONNECTING] = "connecting",
-        [RADIO_STREAMING] = "streaming",
-        [RADIO_ERROR] = "error",
-        [RADIO_ENDED] = "ended",
-    };
-    radio_status_t rs;
-    radio_get_status(&rs);
-    cJSON *jerr = cJSON_AddArrayToObject(root, "errors");
-    uint32_t errors = status_errors();
-    for (int code = 1; code <= STATUS_ERR_MAX; code++) {
-        if (errors & 1 << code) {
-            cJSON_AddItemToArray(jerr, cJSON_CreateNumber(code));
-        }
-    }
-
-    cJSON *jr = cJSON_AddObjectToObject(root, "radio");
-    cJSON_AddStringToObject(jr, "state", RADIO_STATES[rs.state]);
-    static const char *const CODECS[] = {
-        [RADIO_CODEC_MP3] = "MP3", [RADIO_CODEC_AAC] = "AAC", [RADIO_CODEC_FLAC] = "FLAC",
-        [RADIO_CODEC_WAV] = "WAV", [RADIO_CODEC_M4A] = "M4A",
-    };
-    cJSON_AddStringToObject(jr, "codec", CODECS[rs.codec]);
-    cJSON_AddNumberToObject(jr, "buffered", rs.buffered);
-    cJSON_AddNumberToObject(jr, "buffer_size", rs.buffer_size);
-    cJSON_AddStringToObject(jr, "error", rs.error);
-
-    airplay_stats_t as;
-    airplay_get_stats(&as);
-    cJSON *jair = cJSON_AddObjectToObject(root, "airplay");
-    cJSON_AddNumberToObject(jair, "received", as.received);
-    cJSON_AddNumberToObject(jair, "played", as.played);
-    cJSON_AddNumberToObject(jair, "lost", as.lost);
-    cJSON_AddNumberToObject(jair, "volume", airplay_volume());
-
-    static const char *const SPOTIFY_STATES[] = {
-        [SPOTIFY_OFF] = "off",
-        [SPOTIFY_NO_KEYS] = "no_keys",
-        [SPOTIFY_WAITING] = "waiting",
-        [SPOTIFY_CONNECTING] = "connecting",
-        [SPOTIFY_CONNECTED] = "connected",
-        [SPOTIFY_PLAYING] = "playing",
-        [SPOTIFY_PAUSED] = "paused",
-    };
-    static spotify_status_t sp; /* only the httpd task gets here */
-    spotify_get_status(&sp);
-    cJSON *jsp = cJSON_AddObjectToObject(root, "spotify");
-    cJSON_AddStringToObject(jsp, "state", SPOTIFY_STATES[sp.state]);
-    cJSON_AddBoolToObject(jsp, "login_failed", sp.login_failed);
-    cJSON_AddBoolToObject(jsp, "key_failed", sp.key_failed);
-    cJSON_AddStringToObject(jsp, "user", sp.user);
-    cJSON_AddStringToObject(jsp, "title", sp.title);
-    cJSON_AddStringToObject(jsp, "artist", sp.artist);
-    cJSON_AddNumberToObject(jsp, "volume", spotify_volume());
-
-    cJSON *jheap = cJSON_AddObjectToObject(root, "heap");
-    cJSON_AddNumberToObject(jheap, "internal_free", heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
-    cJSON_AddNumberToObject(jheap, "internal_largest", heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
-    cJSON_AddNumberToObject(jheap, "internal_min", heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
-    cJSON_AddNumberToObject(jheap, "psram_free", heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
-
-    char *json = cJSON_PrintUnformatted(root);
-    cJSON_Delete(root);
-    if (json == NULL) {
-        return httpd_resp_send_500(req);
-    }
-    esp_err_t ret = send_json(req, "200 OK", json);
-    free(json);
-    return ret;
+    player_status_json(cJSON_AddObjectToObject(root, "player"));
+    sensor_status_json(cJSON_AddObjectToObject(root, "sensor"));
+    wifi_status_json(cJSON_AddObjectToObject(root, "wifi"));
+    status_errors_json(cJSON_AddArrayToObject(root, "errors"));
+    radio_status_json(cJSON_AddObjectToObject(root, "radio"));
+    airplay_status_json(cJSON_AddObjectToObject(root, "airplay"));
+    spotify_status_json(cJSON_AddObjectToObject(root, "spotify"));
+    sysinfo_heap_json(cJSON_AddObjectToObject(root, "heap"));
+    return send_cjson(req, "200 OK", root);
 }
 
 static int hex_value(char c)
@@ -354,9 +250,7 @@ static esp_err_t track_delete(httpd_req_t *req)
 /* POST /api/player {"action": "start" | "stop"} */
 static esp_err_t player_post(httpd_req_t *req)
 {
-    char *body = read_body(req);
-    cJSON *root = body ? cJSON_Parse(body) : NULL;
-    free(body);
+    cJSON *root = read_json_body(req);
     const cJSON *action = cJSON_GetObjectItemCaseSensitive(root, "action");
     bool ok = cJSON_IsString(action);
     if (ok && strcmp(action->valuestring, "start") == 0) {
@@ -376,9 +270,7 @@ static esp_err_t player_post(httpd_req_t *req)
 /* POST /api/wifi {"ssid": "...", "password": "..."}; empty ssid forgets the network */
 static esp_err_t wifi_post(httpd_req_t *req)
 {
-    char *body = read_body(req);
-    cJSON *root = body ? cJSON_Parse(body) : NULL;
-    free(body);
+    cJSON *root = read_json_body(req);
     const cJSON *ssid = cJSON_GetObjectItemCaseSensitive(root, "ssid");
     const cJSON *password = cJSON_GetObjectItemCaseSensitive(root, "password");
     esp_err_t ret = ESP_ERR_INVALID_ARG;
@@ -395,9 +287,7 @@ static esp_err_t wifi_post(httpd_req_t *req)
 /* POST /api/wifi/ap {"password": "..."}: password of the star's own network, empty: open */
 static esp_err_t wifi_ap_post(httpd_req_t *req)
 {
-    char *body = read_body(req);
-    cJSON *root = body ? cJSON_Parse(body) : NULL;
-    free(body);
+    cJSON *root = read_json_body(req);
     const cJSON *password = cJSON_GetObjectItemCaseSensitive(root, "password");
     esp_err_t ret = cJSON_IsString(password) ? wifi_set_ap_password(password->valuestring)
                                              : ESP_ERR_INVALID_ARG;
@@ -430,11 +320,7 @@ static esp_err_t wifi_scan_get(httpd_req_t *req)
         cJSON_AddItemToArray(jn, j);
     }
     free(nets);
-    char *json = cJSON_PrintUnformatted(root);
-    cJSON_Delete(root);
-    esp_err_t ret = send_json(req, "200 OK", json ? json : "{}");
-    free(json);
-    return ret;
+    return send_cjson(req, "200 OK", root);
 }
 
 /* System page data: CPU load, memory, temperature */

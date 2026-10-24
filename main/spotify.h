@@ -50,6 +50,10 @@ void spotify_get_status(spotify_status_t *out);
 /* Stop button on the web page: pause, also in the phone's app */
 void spotify_stop(void);
 
+struct cJSON;
+/* "spotify" of /api/status */
+void spotify_status_json(struct cJSON *out);
+
 #ifdef __cplusplus
 }
 #endif

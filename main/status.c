@@ -5,6 +5,7 @@
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "cJSON.h"
 #include "player.h"
 #include "radio.h"
 #include "sensor.h"
@@ -123,9 +124,14 @@ void status_start(void)
     xTaskCreate(status_task, "status", 3072, NULL, 2, NULL);
 }
 
-uint32_t status_errors(void)
+void status_errors_json(cJSON *array)
 {
-    return atomic_load(&errors);
+    uint32_t e = atomic_load(&errors);
+    for (int code = 1; code <= STATUS_ERR_MAX; code++) {
+        if (e & 1 << code) {
+            cJSON_AddItemToArray(array, cJSON_CreateNumber(code));
+        }
+    }
 }
 
 void status_led_override(int state)

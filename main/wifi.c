@@ -11,6 +11,7 @@
 #include "lwip/inet.h"
 #include "mdns.h"
 #include "nvs.h"
+#include "cJSON.h"
 #include "wifi.h"
 
 #define AP_MAX_CONN     4
@@ -320,4 +321,40 @@ int wifi_scan(wifi_network_t *out, int max)
         esp_wifi_connect();
     }
     return n;
+}
+
+static const char *state_name(wifi_sta_state_t s)
+{
+    switch (s) {
+    case WIFI_STA_OFF: return "off";
+    case WIFI_STA_CONNECTING: return "connecting";
+    case WIFI_STA_CONNECTED: return "connected";
+    case WIFI_STA_FAILED: return "failed";
+    }
+    return "unknown";
+}
+
+static const char *reason_name(wifi_fail_reason_t r)
+{
+    switch (r) {
+    case WIFI_FAIL_NONE: return "";
+    case WIFI_FAIL_NOT_FOUND: return "not_found";
+    case WIFI_FAIL_WRONG_PASSWORD: return "wrong_password";
+    case WIFI_FAIL_OTHER: return "other";
+    }
+    return "other";
+}
+
+void wifi_status_json(cJSON *out)
+{
+    wifi_status_t ws;
+    wifi_get_status(&ws);
+    cJSON_AddStringToObject(out, "state", state_name(ws.state));
+    cJSON_AddStringToObject(out, "reason", reason_name(ws.reason));
+    cJSON_AddStringToObject(out, "ssid", ws.ssid);
+    cJSON_AddStringToObject(out, "ip", ws.ip);
+    cJSON_AddNumberToObject(out, "rssi", ws.rssi);
+    cJSON_AddStringToObject(out, "hostname", WIFI_HOSTNAME ".local");
+    cJSON_AddStringToObject(out, "ap_ssid", WIFI_AP_SSID);
+    cJSON_AddBoolToObject(out, "ap_secure", wifi_ap_secure());
 }

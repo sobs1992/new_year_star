@@ -25,6 +25,7 @@
 #include "mbedtls/pk.h"
 #include "mdns.h"
 #include "psa/crypto.h"
+#include "cJSON.h"
 #include "airplay.h"
 #include "settings.h"
 
@@ -78,6 +79,12 @@ typedef enum {
     CODEC_ALAC,
     CODEC_PCM, /* L16, big-endian */
 } stream_codec_t;
+
+typedef struct {
+    uint32_t received; /* audio packets that decoded fine */
+    uint32_t played;
+    uint32_t lost;     /* played as silence: missing even after a resend request */
+} airplay_stats_t;
 
 static uint8_t mac[6];
 static SemaphoreHandle_t lock;          /* session + jitter buffer */
@@ -791,11 +798,15 @@ bool airplay_active(void)
     return active;
 }
 
-void airplay_get_stats(airplay_stats_t *out)
+void airplay_status_json(cJSON *out)
 {
     xSemaphoreTake(lock, portMAX_DELAY);
-    *out = stats;
+    airplay_stats_t s = stats;
     xSemaphoreGive(lock);
+    cJSON_AddNumberToObject(out, "received", s.received);
+    cJSON_AddNumberToObject(out, "played", s.played);
+    cJSON_AddNumberToObject(out, "lost", s.lost);
+    cJSON_AddNumberToObject(out, "volume", volume);
 }
 
 uint8_t airplay_volume(void)

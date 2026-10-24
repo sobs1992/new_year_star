@@ -53,3 +53,7 @@ bool wifi_sta_connected(void);
 
 /* Blocking scan (~2 s); returns the number of networks written, or -1 on failure */
 int wifi_scan(wifi_network_t *out, int max);
+
+struct cJSON;
+/* "wifi" of /api/status */
+void wifi_status_json(struct cJSON *out);

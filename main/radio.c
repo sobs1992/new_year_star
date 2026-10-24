@@ -11,6 +11,7 @@
 #include "esp_heap_caps.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
+#include "cJSON.h"
 #include "radio.h"
 #include "settings.h"
 #include "wifi.h"
@@ -66,6 +67,18 @@ static uint32_t wanted_gen;
 static radio_status_t status;
 static TaskHandle_t task;
 static uint8_t rx_buf[RX_CHUNK];
+
+static const char *codec_name(radio_codec_t codec)
+{
+    switch (codec) {
+    case RADIO_CODEC_MP3: return "MP3";
+    case RADIO_CODEC_AAC: return "AAC";
+    case RADIO_CODEC_FLAC: return "FLAC";
+    case RADIO_CODEC_WAV: return "WAV";
+    case RADIO_CODEC_M4A: return "M4A";
+    }
+    return "?";
+}
 
 static size_t ring_write(const uint8_t *data, size_t len)
 {
@@ -284,8 +297,7 @@ static const char *stream(const char *start_url, const char *mime_hint, uint32_t
         int64_t length = esp_http_client_get_content_length(client);
         uint32_t total = code == 206 ? resp.range_total : length > 0 ? (uint32_t)length : 0;
 
-        static const char *const CODEC_NAMES[] = { "MP3", "AAC", "FLAC", "WAV", "M4A" };
-        ESP_LOGI(TAG, "Streaming %s (%s, %" PRIu32 " bytes%s%s)", url, CODEC_NAMES[codec], total,
+        ESP_LOGI(TAG, "Streaming %s (%s, %" PRIu32 " bytes%s%s)", url, codec_name(codec), total,
                  resp.accept_ranges ? ", seekable" : "", code == 206 ? ", from offset" : "");
         set_status(gen, RADIO_STREAMING, codec, NULL);
         xSemaphoreTake(req_lock, portMAX_DELAY);
@@ -427,4 +439,27 @@ void radio_get_status(radio_status_t *out)
     xSemaphoreTake(ring_lock, portMAX_DELAY);
     out->buffered = ring_count;
     xSemaphoreGive(ring_lock);
+}
+
+static const char *state_name(radio_state_t s)
+{
+    switch (s) {
+    case RADIO_STOPPED: return "stopped";
+    case RADIO_CONNECTING: return "connecting";
+    case RADIO_STREAMING: return "streaming";
+    case RADIO_ERROR: return "error";
+    case RADIO_ENDED: return "ended";
+    }
+    return "unknown";
+}
+
+void radio_status_json(cJSON *out)
+{
+    radio_status_t st;
+    radio_get_status(&st);
+    cJSON_AddStringToObject(out, "state", state_name(st.state));
+    cJSON_AddStringToObject(out, "codec", codec_name(st.codec));
+    cJSON_AddNumberToObject(out, "buffered", st.buffered);
+    cJSON_AddNumberToObject(out, "buffer_size", st.buffer_size);
+    cJSON_AddStringToObject(out, "error", st.error);
 }

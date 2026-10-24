@@ -13,6 +13,7 @@
 #include "esp_timer.h"
 #include "esp_audio_dec_default.h"
 #include "esp_audio_simple_dec_default.h"
+#include "cJSON.h"
 #include "airplay.h"
 #include "dlna.h"
 #include "led_music.h"
@@ -873,4 +874,29 @@ void player_start(void)
     assert(cast_pcm);
     /* MP3/AAC decoder needs more stack than the default main task has */
     xTaskCreate(player_task, "player", 8192, NULL, 5, NULL);
+}
+
+static const char *status_name(player_status_t s)
+{
+    switch (s) {
+    case PLAYER_IDLE: return "idle";
+    case PLAYER_WAITING: return "waiting";
+    case PLAYER_PLAYING: return "playing";
+    case PLAYER_PAUSE: return "pause";
+    case PLAYER_RADIO: return "radio";
+    case PLAYER_STOPPED: return "stopped";
+    case PLAYER_CAST: return "cast";
+    }
+    return "unknown";
+}
+
+void player_status_json(cJSON *out)
+{
+    player_status_t s;
+    char track[TRACK_NAME_SIZE];
+    player_get_status(&s, track);
+    cJSON_AddStringToObject(out, "state", status_name(s));
+    if (track[0]) {
+        cJSON_AddStringToObject(out, "track", track);
+    }
 }

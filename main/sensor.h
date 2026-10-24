@@ -29,3 +29,7 @@ void sensor_get_state(sensor_state_t *out);
 
 /* Is there a target matching sensor_trigger_t right now */
 bool sensor_triggered(uint8_t trigger);
+
+struct cJSON;
+/* "sensor" of /api/status */
+void sensor_status_json(struct cJSON *out);

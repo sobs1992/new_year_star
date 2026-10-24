@@ -6,6 +6,7 @@
 #include "driver/gpio.h"
 #include "driver/uart.h"
 #include "esp_log.h"
+#include "cJSON.h"
 #include "sensor.h"
 #include "settings.h"
 
@@ -334,4 +335,28 @@ bool sensor_triggered(uint8_t trigger)
         return s.target & SENSOR_TARGET_MOVING;
     }
     return s.target != SENSOR_TARGET_NONE;
+}
+
+static const char *target_name(sensor_target_t t)
+{
+    switch (t) {
+    case SENSOR_TARGET_NONE: return "none";
+    case SENSOR_TARGET_MOVING: return "moving";
+    case SENSOR_TARGET_STILL: return "still";
+    case SENSOR_TARGET_BOTH: return "both";
+    }
+    return "unknown";
+}
+
+void sensor_status_json(cJSON *out)
+{
+    sensor_state_t s;
+    sensor_get_state(&s);
+    cJSON_AddBoolToObject(out, "online", s.online);
+    cJSON_AddStringToObject(out, "target", target_name(s.target));
+    cJSON_AddNumberToObject(out, "distance_cm", s.distance_cm);
+    cJSON_AddNumberToObject(out, "moving_cm", s.moving_cm);
+    cJSON_AddNumberToObject(out, "still_cm", s.still_cm);
+    cJSON_AddNumberToObject(out, "moving_energy", s.moving_energy);
+    cJSON_AddNumberToObject(out, "still_energy", s.still_energy);
 }

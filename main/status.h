@@ -16,8 +16,9 @@ typedef enum {
 
 void status_start(void);
 
-/* Bit (1 << code) for each active error */
-uint32_t status_errors(void);
+struct cJSON;
+/* "errors" of /api/status: the codes of the active errors, an array */
+void status_errors_json(struct cJSON *array);
 
 /* Let another module drive the LED (factory reset countdown): 0 off, 1 on, -1 give it back */
 void status_led_override(int state);

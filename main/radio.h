@@ -50,3 +50,7 @@ void radio_get_status(radio_status_t *out);
 
 /* Take up to len buffered bytes, never blocks */
 size_t radio_read(uint8_t *buf, size_t len);
+
+struct cJSON;
+/* "radio" of /api/status */
+void radio_status_json(struct cJSON *out);

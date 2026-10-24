@@ -18,14 +18,9 @@ size_t airplay_read(int16_t *pcm, size_t max_frames, int timeout_ms);
 /* Set by the sender: 0..100 */
 uint8_t airplay_volume(void);
 
-typedef struct {
-    uint32_t received; /* audio packets that decoded fine */
-    uint32_t played;
-    uint32_t lost;     /* played as silence: missing even after a resend request */
-} airplay_stats_t;
-
-/* Counters of the current / last session */
-void airplay_get_stats(airplay_stats_t *out);
-
 /* Stop button on the web page: drop the session */
 void airplay_stop(void);
+
+struct cJSON;
+/* "airplay" of /api/status: packet counters of the current / last session, volume */
+void airplay_status_json(struct cJSON *out);

@@ -194,3 +194,11 @@ char *sysinfo_json(void)
     cJSON_Delete(root);
     return json;
 }
+
+void sysinfo_heap_json(cJSON *out)
+{
+    cJSON_AddNumberToObject(out, "internal_free", heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    cJSON_AddNumberToObject(out, "internal_largest", heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+    cJSON_AddNumberToObject(out, "internal_min", heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
+    cJSON_AddNumberToObject(out, "psram_free", heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+}
