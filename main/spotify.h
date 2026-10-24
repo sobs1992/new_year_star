@@ -16,6 +16,10 @@ extern "C" {
 /* Register the zeroconf handlers (/spotify_info) and start the session task */
 void spotify_start(httpd_handle_t httpd);
 
+/* On / off and the developer app's keys (32 hex digits, or empty); without keys it is not
+ * announced. A change logs the session out. May come before spotify_start(). */
+void spotify_configure(bool enabled, const char *client_id, const char *client_secret);
+
 /* The phone plays on the star, or paused it a moment ago */
 bool spotify_active(void);
 

@@ -84,7 +84,10 @@ drive the defaults, the validation, the JSON both ways and the limits the page b
 controls from. Light and sensor settings exist per player mode.
 
 Modules read settings through getters. Most re-read them every frame or poll; the LED task and
-the radar re-read only when `settings_led_version()` / `settings_radar_version()` change.
+the radar re-read only when `settings_led_version()` / `settings_radar_version()` change. The
+cast receivers do not read settings at all: `configure_casts()` in `new_year_star.c` pushes
+their part to them (`dlna_set_enabled()`, `airplay_set_enabled()`, `spotify_configure()`) at
+start and after every change (`settings_on_change()`).
 
 ## Tasks and memory
 
@@ -142,8 +145,8 @@ tests then fail on the documents they compare: add the field there too.
 
 **A cast receiver.** `*_active()` and `*_stop()`, plus either PCM (`read()` of 16-bit stereo at
 44.1 kHz and `volume()`) or its own `play()`; a `SOURCE_*` value and an entry in `CASTS[]` at its
-priority; its start in `app_main()`; an on / off flag in `cast_settings_t` and `CAST_FIELDS`;
-`*_status_json()`.
+priority; its start in `app_main()`; an on / off flag in `cast_settings_t` and `CAST_FIELDS`,
+pushed to it in `configure_casts()`; `*_status_json()`.
 
 **An audio format** (from a URL: radio, DLNA). A `stream_codec_t` value with its line in `CODECS`
 and its MIME types / extension in `FORMATS` (`stream.c`); its decoder on in `sdkconfig.defaults`;

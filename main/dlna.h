@@ -21,6 +21,10 @@ typedef struct {
 /* Register the description / control / event handlers and start SSDP */
 void dlna_start(httpd_handle_t httpd);
 
+/* Switched off, the renderer leaves the network (SSDP byebye) and a session ends; may come
+ * before dlna_start() */
+void dlna_set_enabled(bool on);
+
 /* What the phone wants played: true while playing or paused. out may be NULL. */
 bool dlna_get_job(dlna_job_t *out);
 

@@ -26,7 +26,6 @@
 
 extern "C" {
 #include "app_config.h"
-#include "settings.h"
 }
 
 #define FRAME_BYTES    4                /* 16-bit stereo */
@@ -260,12 +259,32 @@ static void session_poll(void)
     }
 }
 
-/* ---------- mDNS ---------- */
+/* ---------- configuration, from spotify_configure() ---------- */
 
-static bool keys_set(const cast_settings_t &c)
+struct config_t {
+    bool enabled;
+    std::string client_id, client_secret;
+
+    bool usable() const
+    {
+        return enabled && !client_id.empty() && !client_secret.empty();
+    }
+    bool same(const config_t &o) const
+    {
+        return enabled == o.enabled && client_id == o.client_id && client_secret == o.client_secret;
+    }
+};
+
+static std::mutex config_lock;
+static config_t config;
+
+static config_t get_config(void)
 {
-    return c.spotify_client_id[0] && c.spotify_client_secret[0];
+    std::lock_guard<std::mutex> g(config_lock);
+    return config;
 }
+
+/* ---------- mDNS ---------- */
 
 static void advertise(bool on)
 {
@@ -306,7 +325,7 @@ static std::shared_ptr<cspot::LoginBlob> take_login(void)
     }
 }
 
-static void run_session(std::shared_ptr<cspot::LoginBlob> blob, const cast_settings_t &cast)
+static void run_session(std::shared_ptr<cspot::LoginBlob> blob, const config_t &cfg)
 {
     ESP_LOGI(TAG, "Logging in as %s", blob->getUserName().c_str());
     state = SPOTIFY_CONNECTING;
@@ -319,8 +338,8 @@ static void run_session(std::shared_ptr<cspot::LoginBlob> blob, const cast_setti
 
     auto ctx = cspot::Context::createFromBlob(blob);
     ctx->config.audioFormat = AudioFormat_OGG_VORBIS_160;
-    ctx->config.clientId = cast.spotify_client_id;
-    ctx->config.clientSecret = cast.spotify_client_secret;
+    ctx->config.clientId = cfg.client_id;
+    ctx->config.clientSecret = cfg.client_secret;
     ctx->config.volume = volume;
 
     /* Network errors are retried, a declined login is final */
@@ -366,10 +385,7 @@ static void run_session(std::shared_ptr<cspot::LoginBlob> blob, const cast_setti
         session_poll();
         state = !playing ? SPOTIFY_CONNECTED : paused ? SPOTIFY_PAUSED : SPOTIFY_PLAYING;
 
-        cast_settings_t now;
-        settings_get_cast(&now);
-        if (!now.spotify || strcmp(now.spotify_client_id, cast.spotify_client_id) != 0 ||
-            strcmp(now.spotify_client_secret, cast.spotify_client_secret) != 0) {
+        if (!get_config().same(cfg)) {
             ESP_LOGI(TAG, "Settings changed, logging out");
             break;
         }
@@ -393,17 +409,16 @@ static void run_session(std::shared_ptr<cspot::LoginBlob> blob, const cast_setti
 static void session_task(void *arg)
 {
     for (;;) {
-        cast_settings_t cast;
-        settings_get_cast(&cast);
-        advertise(cast.spotify && keys_set(cast));
-        if (!cast.spotify || !keys_set(cast)) {
-            state = cast.spotify ? SPOTIFY_NO_KEYS : SPOTIFY_OFF;
+        config_t cfg = get_config();
+        advertise(cfg.usable());
+        if (!cfg.usable()) {
+            state = cfg.enabled ? SPOTIFY_NO_KEYS : SPOTIFY_OFF;
             std::lock_guard<std::mutex> g(zc_lock);
             zc_pending = false;
         } else {
             auto blob = take_login();
             if (blob) {
-                run_session(blob, cast);
+                run_session(blob, cfg);
                 continue; /* a login that ended the session may be waiting */
             }
             state = SPOTIFY_WAITING;
@@ -484,9 +499,7 @@ static esp_err_t add_user_post(httpd_req_t *req)
         pos = end + 1;
     }
 
-    cast_settings_t cast;
-    settings_get_cast(&cast);
-    bool accepted = cast.spotify && keys_set(cast) && query["action"] == "addUser" &&
+    bool accepted = get_config().usable() && query["action"] == "addUser" &&
                     !query["userName"].empty() && !query["blob"].empty() && !query["clientKey"].empty();
     if (accepted) {
         ESP_LOGI(TAG, "Login from the app: %s", query["userName"].c_str());
@@ -617,4 +630,17 @@ void spotify_status_json(cJSON *out)
     cJSON_AddStringToObject(out, "title", st.title);
     cJSON_AddStringToObject(out, "artist", st.artist);
     cJSON_AddNumberToObject(out, "volume", spotify_volume());
+}
+
+void spotify_configure(bool enabled, const char *client_id, const char *client_secret)
+{
+    {
+        std::lock_guard<std::mutex> g(config_lock);
+        config.enabled = enabled;
+        config.client_id = client_id;
+        config.client_secret = client_secret;
+    }
+    if (task) {
+        xTaskNotifyGive(task); /* announce or withdraw now */
+    }
 }

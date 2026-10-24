@@ -7,6 +7,7 @@
  * Audio comes as RTP packets of 352 stereo frames, AES-128-CBC encrypted ALAC or plain PCM.
  * Packets go into a jitter buffer by sequence number; the player takes them out in order.
  */
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,7 +29,6 @@
 #include "cJSON.h"
 #include "airplay.h"
 #include "app_config.h"
-#include "settings.h"
 
 #define RTSP_PORT       5000
 #define FRAMES          352            /* per packet */
@@ -91,6 +91,7 @@ static SemaphoreHandle_t lock;          /* session + jitter buffer */
 static volatile bool active;           /* RECORD received, not torn down */
 static volatile bool stop_requested;
 static uint8_t volume = 60;
+static atomic_bool enabled;
 
 /* Session, set up by ANNOUNCE / SETUP */
 static stream_codec_t codec;
@@ -698,9 +699,7 @@ static void rtsp_serve(int conn)
             if (sel < 0) {
                 break;
             }
-            cast_settings_t cast;
-            settings_get_cast(&cast);
-            if (!cast.airplay) {
+            if (!atomic_load(&enabled)) {
                 break;
             }
         }
@@ -747,9 +746,8 @@ static void rtsp_task(void *arg)
         vTaskDelete(NULL);
     }
     for (;;) {
-        cast_settings_t cast;
-        settings_get_cast(&cast);
-        advertise(cast.airplay);
+        bool on = atomic_load(&enabled);
+        advertise(on);
 
         fd_set fds;
         FD_ZERO(&fds);
@@ -762,7 +760,7 @@ static void rtsp_task(void *arg)
         if (conn < 0) {
             continue;
         }
-        if (!cast.airplay) {
+        if (!on) {
             close(conn);
             continue;
         }
@@ -791,6 +789,11 @@ void airplay_start(void)
     /* Stacks in PSRAM: internal RAM is short, and these never touch the flash */
     xTaskCreateWithCaps(rtsp_task, "airplay_rtsp", 8192, NULL, 4, NULL, MALLOC_CAP_SPIRAM);
     xTaskCreateWithCaps(udp_task, "airplay_udp", 6144, NULL, 6, NULL, MALLOC_CAP_SPIRAM);
+}
+
+void airplay_set_enabled(bool on)
+{
+    atomic_store(&enabled, on);
 }
 
 bool airplay_active(void)

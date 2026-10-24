@@ -1,5 +1,6 @@
 #include <inttypes.h>
 #include <stdarg.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -17,7 +18,6 @@
 #include "lwip/sockets.h"
 #include "app_config.h"
 #include "dlna.h"
-#include "settings.h"
 
 #define DESC_PATH       "/dlna/description.xml"
 #define SSDP_ADDR       "239.255.255.250"
@@ -100,6 +100,7 @@ static bool mute;
 static subscriber_t subs[MAX_SUBSCRIBERS];
 static bool dirty[SERVICE_COUNT]; /* state changed: event to send */
 static TaskHandle_t event_task_handle;
+static atomic_bool enabled;
 
 /* ---------- small XML helpers ---------- */
 
@@ -1067,15 +1068,14 @@ static void ssdp_task(void *arg)
     int64_t last_notify = 0;
     static char buf[1024];
     for (;;) {
-        cast_settings_t cast;
-        settings_get_cast(&cast);
-        if (!cast.dlna) {
+        bool on = atomic_load(&enabled);
+        if (!on) {
             dlna_stop();
         }
-        ssdp_update_interfaces(sock, cast.dlna);
+        ssdp_update_interfaces(sock, on);
 
         int64_t now = esp_timer_get_time();
-        if (cast.dlna && now - last_notify > SSDP_NOTIFY_MS * 1000LL) {
+        if (on && now - last_notify > SSDP_NOTIFY_MS * 1000LL) {
             last_notify = now;
             for (size_t i = 0; i < sizeof(ifaces) / sizeof(ifaces[0]); i++) {
                 if (ifaces[i].joined) {
@@ -1087,7 +1087,7 @@ static void ssdp_task(void *arg)
         struct sockaddr_in from;
         socklen_t from_len = sizeof(from);
         int n = recvfrom(sock, buf, sizeof(buf) - 1, 0, (struct sockaddr *)&from, &from_len);
-        if (n > 0 && cast.dlna) {
+        if (n > 0 && on) {
             buf[n] = '\0';
             ssdp_answer(sock, buf, &from);
         }
@@ -1095,6 +1095,11 @@ static void ssdp_task(void *arg)
 }
 
 /* ---------- public ---------- */
+
+void dlna_set_enabled(bool on)
+{
+    atomic_store(&enabled, on);
+}
 
 void dlna_start(httpd_handle_t httpd)
 {

@@ -43,6 +43,7 @@ static char *saved_json; /* last JSON written to NVS, to skip identical writes *
  * stale settings cannot overwrite newer ones. Random start: pages open across a reboot
  * are stale too. */
 static uint32_t revision;
+static void (*on_change)(void);
 
 /* ---------- field tables ---------- */
 
@@ -861,5 +862,13 @@ esp_err_t settings_from_json(const char *json, char *err, size_t err_len)
     }
 
     save();
+    if (on_change) {
+        on_change();
+    }
     return ESP_OK;
+}
+
+void settings_on_change(void (*changed)(void))
+{
+    on_change = changed;
 }

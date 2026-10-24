@@ -8,6 +8,10 @@
 
 void airplay_start(void);
 
+/* Switched off, it is not announced, refuses senders and ends a session within a second; may
+ * come before airplay_start() */
+void airplay_set_enabled(bool on);
+
 /* A sender is streaming to us */
 bool airplay_active(void);
 

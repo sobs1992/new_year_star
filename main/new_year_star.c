@@ -15,6 +15,16 @@
 #include "web.h"
 #include "wifi.h"
 
+/* The receivers get their part of the settings pushed from here: they do not read settings */
+static void configure_casts(void)
+{
+    cast_settings_t c;
+    settings_get_cast(&c);
+    dlna_set_enabled(c.dlna);
+    airplay_set_enabled(c.airplay);
+    spotify_configure(c.spotify, c.spotify_client_id, c.spotify_client_secret);
+}
+
 void app_main(void)
 {
     esp_err_t ret = nvs_flash_init();
@@ -36,6 +46,8 @@ void app_main(void)
 
     httpd_handle_t httpd = web_start();
     /* Receivers phones cast to */
+    configure_casts();
+    settings_on_change(configure_casts);
     dlna_start(httpd);
     airplay_start();
     spotify_start(httpd);

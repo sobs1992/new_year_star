@@ -119,6 +119,10 @@ bool settings_get_current_station(radio_station_t *out);
 uint8_t settings_get_radio_volume(void);
 uint16_t settings_get_radio_minutes(void);
 
+/* Called after the web page changed the settings, in its task (httpd): for modules that get
+ * their configuration pushed instead of reading it here. One listener. */
+void settings_on_change(void (*changed)(void));
+
 /* JSON of all settings; for_ui adds value limits, file sizes and storage usage. Caller frees. */
 char *settings_to_json(bool for_ui);
 /* Validate the whole document, apply and save to NVS; err gets a reason on failure.

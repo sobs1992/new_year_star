@@ -510,6 +510,26 @@ static void change_counters(void)
     CHECK(settings_led_version() != led && settings_radar_version() != radar);
 }
 
+static int changes;
+
+static void count_change(void)
+{
+    changes++;
+}
+
+/* Modules that get their configuration pushed hear of accepted changes only */
+static void change_listener(void)
+{
+    boot(NULL);
+    settings_on_change(count_change);
+    CHECK_EQ_INT(post_change("cast.dlna", "false"), ESP_OK);
+    CHECK_EQ_INT(changes, 1);
+    CHECK_EQ_INT(post_change("led.count", "0"), ESP_ERR_INVALID_ARG);
+    CHECK_EQ_INT(post_change("revision", "1"), ESP_ERR_INVALID_STATE);
+    CHECK_EQ_INT(settings_add_track("new.mp3"), ESP_OK);
+    CHECK_EQ_INT(changes, 1);
+}
+
 /* ---------- track list ---------- */
 
 static void tracks_are_added_and_removed(void)
@@ -570,6 +590,7 @@ int main(void)
         TEST(spotify_secret_stays_on_the_device),
         TEST(ui_json_has_limits_and_extras),
         TEST(change_counters),
+        TEST(change_listener),
         TEST(tracks_are_added_and_removed),
         TEST(track_names),
     };
