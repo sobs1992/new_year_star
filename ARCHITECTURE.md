@@ -1,185 +1,190 @@
-# New Year star firmware
+# Прошивка новогодней звезды
 
-An ESP32-C5 (Seeed XIAO ESP32-C5, 8 MB flash, 8 MB PSRAM) inside a Christmas star. It plays
-MP3 files from its flash, internet radio, or whatever a phone casts (DLNA, AirPlay 1, Spotify
-Connect) on a MAX98357 I2S amplifier; a WS2812 strip follows the music; a 24 GHz mmWave radar
-can start the music when someone comes by. Everything is set up on a web page, served on the
-star's own Wi-Fi network (always on, captive portal) and on the home network (http://star.local).
+ESP32-C5 (Seeed XIAO ESP32-C5, 8 МБ флеша, 8 МБ PSRAM) внутри новогодней звезды. Она играет
+MP3-файлы из своего флеша, интернет-радио или то, что транслирует телефон (DLNA, AirPlay 1,
+Spotify Connect), через I2S-усилитель MAX98357; лента WS2812 светится в такт музыке; радар
+24 ГГц mmWave может включать музыку, когда кто-то подходит. Всё настраивается на веб-странице,
+которая доступна в собственной Wi-Fi-сети звезды (включена всегда, captive portal) и в домашней
+сети (http://star.local).
 
-## Build, flash, test
+## Сборка, прошивка, тесты
 
 ```sh
-. ./set_env.sh            # ESP-IDF 6.1 environment and the board's serial port
+. ./set_env.sh            # окружение ESP-IDF 6.1 и последовательный порт платы
 idf.py build
-idf.py app-flash          # firmware only: settings (NVS) and uploaded tracks stay
-idf.py storage-flash      # the bundled tracks in assets/tracks: overwrites uploaded ones
-make -C test/host         # host tests, plain gcc (run idf.py reconfigure once for cJSON)
+idf.py app-flash          # только прошивка: настройки (NVS) и загруженные треки остаются
+idf.py storage-flash      # встроенные треки из assets/tracks: затирает загруженные
+make -C test/host         # host-тесты, обычный gcc (один раз запустите idf.py reconfigure ради cJSON)
 ```
 
-Partitions (`partitions.csv`): NVS, the app (2.5 MB, ~13 % free) and LittleFS with the tracks
-(the rest of the flash).
+Разделы (`partitions.csv`): NVS, приложение (2,5 МБ, свободно ~13 %) и LittleFS с треками
+(остаток флеша).
 
-## Modules
+## Модули
 
-All application code is in `main/`: playback in `main/player/`, Wi-Fi and the HTTP server in
-`main/web/`, the rest at the top level.
-`components/` holds the vendored cspot (Spotify) and the captive portal DNS server.
-`app_main()` in `new_year_star.c` starts the modules in order.
+Весь код приложения лежит в `main/`: воспроизведение — в `main/player/`, Wi-Fi и HTTP-сервер —
+в `main/web/`, остальное — на верхнем уровне.
+В `components/` — встроенные копии cspot (Spotify) и DNS-сервера для captive portal.
+`app_main()` в `new_year_star.c` запускает модули по порядку.
 
-| Module | What it does |
+| Модуль | Что делает |
 |---|---|
-| `storage` | LittleFS at `/tracks`: mounting, paths, free space, what a track file is |
-| `settings` | All user settings: one JSON document in NVS, validated, versioned |
-| `tracks` | Uploading and deleting track files (file + entry in the settings) |
-| `player/player` | Decides what plays and plays it: decoders, volume, I2S output |
-| `player/stream` | HTTP(S) download of a stream or file into a PSRAM ring (radio and DLNA); the formats |
-| `player/icy` | ICY metadata of a radio stream: taken out of the audio, the song title; host-tested |
-| `player/dlna` | UPnP media renderer: SSDP, SOAP control, GENA events |
-| `player/airplay` | AirPlay 1 (RAOP) receiver: RTSP, RTP, ALAC, jitter buffer |
-| `player/spotify` | Spotify Connect over cspot: zeroconf login, decoded audio ring |
-| `web/wifi` | Access point, home network, mDNS (`star.local`), scanning |
-| `web/web` | HTTP server: the pages (`assets/*.html`, embedded), the JSON API, the captive portal |
-| `led_music` | The LED strip: light music from the audio levels the player feeds it |
-| `sensor` | The radar on UART: target, distance, pushing gate / threshold settings, restarting it when silent |
-| `status` | The yellow LED on the board: blinks the code of the most basic error |
-| `button` | BOOT held 5 s: factory reset; a short press: the next radio station; polled by the status task |
-| `sysinfo` | `/system` page data: CPU per task, RAM, PSRAM, temperature |
-| `board.h` | Which GPIO is wired to what |
-| `app_config.h` | Names several modules share: the device name, the NVS namespace |
+| `storage` | LittleFS в `/tracks`: монтирование, пути, свободное место, что считается файлом трека |
+| `settings` | Все пользовательские настройки: один JSON-документ в NVS, с проверкой и ревизиями |
+| `tracks` | Загрузка и удаление файлов треков (файл + запись в настройках) |
+| `player/player` | Решает, что играет, и играет: декодеры, громкость, вывод в I2S |
+| `player/stream` | Загрузка потока или файла по HTTP(S) в кольцевой буфер в PSRAM (радио и DLNA); форматы |
+| `player/icy` | ICY-метаданные радиопотока: вырезает их из звука, достаёт название песни; покрыт host-тестами |
+| `player/dlna` | Медиарендерер UPnP: SSDP, управление по SOAP, события GENA |
+| `player/airplay` | Приёмник AirPlay 1 (RAOP): RTSP, RTP, ALAC, джиттер-буфер |
+| `player/spotify` | Spotify Connect на cspot: вход через zeroconf, кольцевой буфер декодированного звука |
+| `web/wifi` | Точка доступа, домашняя сеть, mDNS (`star.local`), поиск сетей |
+| `web/web` | HTTP-сервер: страницы (`assets/*.html`, встроены в прошивку), JSON API, captive portal |
+| `led_music` | Светодиодная лента: цветомузыка по уровням звука, которые передаёт плеер |
+| `sensor` | Радар на UART: цель, расстояние, запись настроек зон и порога, перезапуск при молчании |
+| `status` | Жёлтый светодиод на плате: мигает кодом самой базовой ошибки |
+| `button` | BOOT, удержание 5 с: сброс к заводским настройкам; короткое нажатие: следующая радиостанция; опрашивается задачей status |
+| `sysinfo` | Данные страницы `/system`: загрузка CPU по задачам, RAM, PSRAM, температура |
+| `board.h` | Какой GPIO к чему подключён |
+| `app_config.h` | Имена, общие для нескольких модулей: имя устройства, пространство имён NVS |
 
-## What plays
+## Что играет
 
-`wanted_source()` in `player.c` is the one place that decides who gets the speaker:
+`wanted_source()` в `player.c` — единственное место, которое решает, кому достаётся динамик:
 
-1. A phone casting, by priority: AirPlay, Spotify, DLNA (an open DLNA session also holds the
-   speaker between the phone's tracks). The receivers are the `CASTS[]` table.
-2. After the stop button: nothing. The button also ends the casts of the moment; a cast started
-   afterwards plays all the same.
-3. The player mode: the playlist (enabled tracks with repeats and pauses) or the radio.
+1. Трансляция с телефона, по приоритету: AirPlay, Spotify, DLNA (открытая сессия DLNA держит
+   динамик и между треками телефона). Приёмники перечислены в таблице `CASTS[]`.
+2. После кнопки «Стоп»: ничего. Кнопка также завершает текущие трансляции; трансляция, начатая
+   после неё, всё равно играет.
+3. Режим плеера: плейлист (включённые треки с повторами и паузами) или радио.
 
-The sensor decides *when* the own mode starts (`wait_for_trigger()`): with it enabled, a set
-number of playlist passes or radio minutes per trigger, then a cooldown. Every playback
-loop asks `wanted_source()` before each frame and stops once its source is not wanted, so
-settings, the stop button and casts take effect within a frame.
+Датчик решает, *когда* начинается собственный режим (`wait_for_trigger()`): если он включён, на
+каждое срабатывание играет заданное число проходов плейлиста или минут радио, затем пауза
+(cooldown). Каждый цикл воспроизведения спрашивает `wanted_source()` перед каждым кадром и
+останавливается, как только его источник больше не нужен, поэтому настройки, кнопка «Стоп» и
+трансляции срабатывают в пределах кадра.
 
 ```
-MP3 file in LittleFS ──────────────┐
-radio / DLNA URL → stream.c ring ──┴─ decode() ─┐
-AirPlay (RTP, jitter buffer) ───────────────────┼─ play_pcm(): volume, levels → led_music
-Spotify (cspot decoder, ring) ──────────────────┘        └─ I2S → MAX98357
+MP3-файл в LittleFS ───────────────┐
+радио / DLNA → кольцо stream.c ────┴─ decode() ─┐
+AirPlay (RTP, джиттер-буфер) ───────────────────┼─ play_pcm(): громкость, уровни → led_music
+Spotify (декодер cspot, кольцо) ────────────────┘        └─ I2S → MAX98357
 ```
 
-`play_pcm()` also measures the loudness of the whole signal and of bass / mids / treble per
-block; `led_music` turns them into brightness and color 100 times a second (auto gain,
-attack / release). The strip is driven over SPI with DMA: the C5's RMT has no DMA, and Wi-Fi
-interrupts corrupt its WS2812 timing.
+`play_pcm()` также измеряет громкость всего сигнала и отдельно басов / средних / высоких в каждом
+блоке; `led_music` превращает их в яркость и цвет 100 раз в секунду (автоусиление, атака /
+спад). Лента управляется через SPI с DMA: у RMT в C5 нет DMA, а прерывания Wi-Fi портят ему
+тайминги WS2812.
 
-A radio station's song title comes inside the stream (ICY metadata, `icy.c`): `stream.c` takes
-it out before the ring and shows it (`radio.title` in `/api/status`) only once the player has
-read up to where it arrived, since the ring holds the next 10-20 s.
+Название песни на радиостанции приходит внутри потока (ICY-метаданные, `icy.c`): `stream.c`
+вырезает его до записи в кольцо и показывает (`radio.title` в `/api/status`) только когда плеер
+дочитал до места, где оно пришло, потому что в кольце лежат следующие 10–20 с звука.
 
-## Settings
+## Настройки
 
-One JSON document in NVS (namespace `star`, key `settings`); Wi-Fi keeps its own keys in the
-same namespace. `GET /api/settings` gives the page the document plus value limits, presets and
-storage figures; the page posts the whole document back, with the `revision` it edited: a page
-holding outdated settings gets 409 instead of overwriting newer ones.
+Один JSON-документ в NVS (пространство имён `star`, ключ `settings`); Wi-Fi хранит свои ключи в
+том же пространстве имён. `GET /api/settings` отдаёт странице документ, а также пределы значений,
+предустановки и данные о хранилище; страница отправляет обратно весь документ с той `revision`,
+которую она редактировала: страница с устаревшими настройками получает 409, а не затирает более
+новые.
 
-Every field is one line in a table in `settings.c`: JSON key, struct member, range, default,
-and `.optional` for fields that came later (saved settings without them still load). The tables
-drive the defaults, the validation, the JSON both ways and the limits the page builds its
-controls from. Light and sensor settings exist per player mode.
+Каждое поле — одна строка в таблице в `settings.c`: ключ JSON, поле структуры, диапазон, значение
+по умолчанию и `.optional` для полей, добавленных позже (сохранённые настройки без них всё равно
+загружаются). Таблицы задают значения по умолчанию, проверку, JSON в обе стороны и пределы, по
+которым страница строит свои элементы управления. Настройки света и датчика есть для каждого
+режима плеера отдельно.
 
-Modules read settings through getters. Most re-read them every frame or poll; the LED task and
-the radar re-read only when `settings_led_version()` / `settings_radar_version()` change. The
-cast receivers do not read settings at all: `configure_casts()` in `new_year_star.c` pushes
-their part to them (`dlna_set_enabled()`, `airplay_set_enabled()`, `spotify_configure()`) at
-start and after every change (`settings_on_change()`).
+Модули читают настройки через геттеры. Большинство перечитывает их каждый кадр или опрос; задача
+ленты и радар перечитывают только при изменении `settings_led_version()` /
+`settings_radar_version()`. Приёмники трансляций вообще не читают настройки: `configure_casts()` в
+`new_year_star.c` передаёт им их часть (`dlna_set_enabled()`, `airplay_set_enabled()`,
+`spotify_configure()`) при старте и после каждого изменения (`settings_on_change()`).
 
-## Tasks and memory
+## Задачи и память
 
-Internal RAM, not PSRAM, is what runs out: the I2S DMA buffers and Wi-Fi need it, and with a
-few KB less the I2S channel cannot be set up. While the radio plays about 47 KB of internal RAM
-are free (`heap.internal_free` in `/api/status`, `/system` has the details). So:
+Заканчивается внутренняя RAM, а не PSRAM: она нужна буферам I2S DMA и Wi-Fi, и если её станет
+меньше на несколько КБ, канал I2S не создастся. Пока играет радио, свободно около 47 КБ
+внутренней RAM (`heap.internal_free` в `/api/status`, подробности на `/system`). Поэтому:
 
-- Big buffers go to PSRAM (`heap_caps_malloc(..., MALLOC_CAP_SPIRAM)`); a plain `malloc()`
-  below 4 KB stays internal (`CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL`), C++ `new` of cspot goes
-  to PSRAM.
-- Task stacks go to PSRAM (`xTaskCreateWithCaps`) unless the task uses the flash driver (NVS,
-  LittleFS, reading or writing): a PSRAM stack cannot be used while the flash is busy.
-- After a change that adds statics, tasks or allocations: flash and compare `/api/status`.
+- Большие буферы — в PSRAM (`heap_caps_malloc(..., MALLOC_CAP_SPIRAM)`); обычный `malloc()`
+  меньше 4 КБ остаётся во внутренней памяти (`CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL`), C++ `new`
+  в cspot идёт в PSRAM.
+- Стеки задач — в PSRAM (`xTaskCreateWithCaps`), если задача не работает с драйвером флеша (NVS,
+  LittleFS, чтение или запись): стеком в PSRAM нельзя пользоваться, пока флеш занят.
+- После изменения, которое добавляет статические переменные, задачи или выделения памяти:
+  прошейте и сравните `/api/status`.
 
-| Task | Prio | Stack | Stack in | Job |
+| Задача | Приоритет | Стек | Где стек | Работа |
 |---|---|---|---|---|
-| `stream` | 6 | 8 KB | PSRAM | HTTP(S) stream into the ring |
-| `airplay_udp` | 6 | 6 KB | PSRAM | RTP audio, resend requests, timing |
-| `player` | 5 | 8 KB | internal | decoding, I2S output; reads LittleFS |
-| `sensor` | 5 | 4 KB | internal | radar UART |
-| `httpd` | 5 | 6 KB | internal | web page, API, DLNA SOAP, Spotify zeroconf; writes NVS and LittleFS |
-| `dns_server` | 5 | 4 KB | internal | captive portal |
-| `led_music` | 4 | 4 KB | internal | LED strip, 10 ms frames |
-| `airplay_rtsp` | 4 | 8 KB | PSRAM | AirPlay session |
-| `status` | 3 | 3 KB | internal | yellow LED and BOOT button; the factory reset erases NVS, the next station saves the settings |
-| `dlna_events`, `ssdp` | 3 | 6 / 4 KB | PSRAM | DLNA events, discovery |
-| `spotify` | 3 | 16 KB | PSRAM | Spotify session |
-| `cspot_player`, `CSpotTrackQueue`, `mercury_dispatcher` | 3 | 48 / 32 / 10 KB | PSRAM | cspot |
+| `stream` | 6 | 8 КБ | PSRAM | поток HTTP(S) в кольцо |
+| `airplay_udp` | 6 | 6 КБ | PSRAM | звук по RTP, запросы повтора, синхронизация |
+| `player` | 5 | 8 КБ | внутренняя | декодирование, вывод в I2S; читает LittleFS |
+| `sensor` | 5 | 4 КБ | внутренняя | UART радара |
+| `httpd` | 5 | 6 КБ | внутренняя | веб-страница, API, DLNA SOAP, Spotify zeroconf; пишет NVS и LittleFS |
+| `dns_server` | 5 | 4 КБ | внутренняя | captive portal |
+| `led_music` | 4 | 4 КБ | внутренняя | светодиодная лента, кадры по 10 мс |
+| `airplay_rtsp` | 4 | 8 КБ | PSRAM | сессия AirPlay |
+| `status` | 3 | 3 КБ | внутренняя | жёлтый светодиод и кнопка BOOT; сброс к заводским стирает NVS, следующая станция сохраняет настройки |
+| `dlna_events`, `ssdp` | 3 | 6 / 4 КБ | PSRAM | события DLNA, обнаружение |
+| `spotify` | 3 | 16 КБ | PSRAM | сессия Spotify |
+| `cspot_player`, `CSpotTrackQueue`, `mercury_dispatcher` | 3 | 48 / 32 / 10 КБ | PSRAM | cspot |
 
-Plus ESP-IDF's own: Wi-Fi, lwIP, mDNS, esp_timer, idle.
+Плюс собственные задачи ESP-IDF: Wi-Fi, lwIP, mDNS, esp_timer, idle.
 
 ## HTTP API
 
-| Request | |
+| Запрос | |
 |---|---|
-| `GET /`, `GET /system` | the settings page, the system page |
-| `GET /api/settings`, `POST /api/settings` | the settings document (see above) |
-| `GET /api/status` | live state: player, sensor, Wi-Fi, error codes, radio, casts, heap, the settings revision |
-| `POST /api/tracks?name=x.mp3`, `DELETE /api/tracks?name=x.mp3` | upload (raw body) / delete a track |
-| `POST /api/player` | `{"action": "start"}`, `"stop"` or `"next"` (radio station): the buttons |
-| `POST /api/wifi`, `POST /api/wifi/ap`, `GET /api/wifi/scan` | home network, access point password, scan (~11 s) |
-| `GET /api/system` | CPU, memory, temperature, versions |
-| `/dlna/...`, `/spotify_info` | DLNA renderer and Spotify zeroconf, for phones |
+| `GET /`, `GET /system` | страница настроек, системная страница |
+| `GET /api/settings`, `POST /api/settings` | документ настроек (см. выше) |
+| `GET /api/status` | текущее состояние: плеер, датчик, Wi-Fi, коды ошибок, радио, трансляции, память, ревизия настроек |
+| `POST /api/tracks?name=x.mp3`, `DELETE /api/tracks?name=x.mp3` | загрузка (тело запроса как есть) / удаление трека |
+| `POST /api/player` | `{"action": "start"}`, `"stop"` или `"next"` (радиостанция): кнопки |
+| `POST /api/wifi`, `POST /api/wifi/ap`, `GET /api/wifi/scan` | домашняя сеть, пароль точки доступа, поиск сетей (~11 с) |
+| `GET /api/system` | CPU, память, температура, версии |
+| `/dlna/...`, `/spotify_info` | рендерер DLNA и Spotify zeroconf, для телефонов |
 
-Any other URL redirects to `/`: that is how phones detect the captive portal.
+Любой другой URL перенаправляется на `/`: так телефоны обнаруживают captive portal.
 
-## How to add
+## Как добавить
 
-**A setting.** A member in the struct in `settings.h`; a line in the field table in
-`settings.c` (`.optional = true`: settings saved by older firmware lack it); its label and hint
-in the matching `*_FIELDS` list in `index.html` (the range comes from the firmware). The host
-tests then fail on the documents they compare: add the field there too.
+**Настройку.** Поле в структуре в `settings.h`; строку в таблице полей в `settings.c`
+(`.optional = true`: в настройках, сохранённых старой прошивкой, его нет); подпись и подсказку в
+соответствующем списке `*_FIELDS` в `index.html` (диапазон приходит из прошивки). После этого
+host-тесты упадут на документах, которые они сравнивают: добавьте поле и туда.
 
-**A status field.** In the module's `*_status_json()`, then show it in `index.html`.
+**Поле статуса.** В `*_status_json()` модуля, затем показать его в `index.html`.
 
-**A cast receiver.** `*_active()` and `*_stop()`, plus either PCM (`read()` of 16-bit stereo at
-44.1 kHz and `volume()`) or its own `play()`; a `SOURCE_*` value and an entry in `CASTS[]` at its
-priority; its start in `app_main()`; an on / off flag in `cast_settings_t` and `CAST_FIELDS`,
-pushed to it in `configure_casts()`; `*_status_json()`.
+**Приёмник трансляций.** `*_active()` и `*_stop()`, а также либо PCM (`read()` 16-битного стерео
+44,1 кГц и `volume()`), либо собственный `play()`; значение `SOURCE_*` и запись в `CASTS[]` на месте
+его приоритета; запуск в `app_main()`; флаг вкл / выкл в `cast_settings_t` и `CAST_FIELDS`,
+передаваемый ему в `configure_casts()`; `*_status_json()`.
 
-**An audio format** (from a URL: radio, DLNA). A `stream_codec_t` value with its line in `CODECS`
-and its MIME types / extension in `FORMATS` (`stream.c`); its decoder on in `sdkconfig.defaults`;
-its MIME types in `SINK_PROTOCOLS` (`dlna.c`), so phones offer it.
+**Аудиоформат** (по URL: радио, DLNA). Значение `stream_codec_t` со строкой в `CODECS` и его
+MIME-типы / расширение в `FORMATS` (`stream.c`); его декодер включается в `sdkconfig.defaults`;
+его MIME-типы в `SINK_PROTOCOLS` (`dlna.c`), чтобы телефоны его предлагали.
 
-**A light color mode.** A `light_color_t` value (`settings.h`), its name in `COLOR_NAMES`
-(`settings.c`), a case in the color switch of `led_task()` (`led_music.c`), a button and a hint
-(`LIGHT_HINTS`) in `index.html`.
+**Цветовой режим света.** Значение `light_color_t` (`settings.h`), его имя в `COLOR_NAMES`
+(`settings.c`), ветка в switch по цвету в `led_task()` (`led_music.c`), кнопка и подсказка
+(`LIGHT_HINTS`) в `index.html`.
 
-**An error code.** A `status_error_t` value (the code is the number of blinks; lower codes are
-the more basic problems), its check in `check_errors()` (`status.c`), its text in `ERRORS`
+**Код ошибки.** Значение `status_error_t` (код — это число миганий; чем меньше код, тем более
+базовая проблема), его проверка в `check_errors()` (`status.c`), его текст в `ERRORS`
 (`index.html`).
 
-**An HTTP endpoint.** A handler and a line in `uris[]` in `web.c`; `max_uri_handlers` counts
-the handlers of web, DLNA and Spotify together.
+**HTTP-эндпоинт.** Обработчик и строка в `uris[]` в `web.c`; `max_uri_handlers` считает
+обработчики web, DLNA и Spotify вместе.
 
-## Conventions
+## Соглашения
 
-- A module is `foo.c` / `foo.h`: `foo_start()` creates its task; getters copy a snapshot of the
-  state under the module's lock. Modules learn about changes by polling; generation counters
-  tell a current request from a stale one (radio, DLNA), version counters tell settings changes.
-- Enum names for JSON come from a `switch` without `default`: a new value without a name stops
-  the build.
-- Code and comments in English, the web page in Russian. Comments say why: hardware, memory,
-  protocol quirks.
-- Messages for people (uploads, Wi-Fi, stream errors) are in Russian. Settings validation errors
-  are in English: the page builds its controls from the limits and never sends values out of
-  range, so those are for developers.
-- Pins only in `board.h`, shared names only in `app_config.h`.
+- Модуль — это `foo.c` / `foo.h`: `foo_start()` создаёт его задачу; геттеры копируют снимок
+  состояния под блокировкой модуля. Модули узнают об изменениях опросом; счётчики поколений
+  отличают текущий запрос от устаревшего (радио, DLNA), счётчики версий — изменения настроек.
+- Имена значений enum для JSON берутся из `switch` без `default`: новое значение без имени
+  останавливает сборку.
+- Код и комментарии — на английском, веб-страница и документация (`*.md`) — на русском.
+  Комментарии объясняют «почему»: железо, память, особенности протоколов.
+- Сообщения для людей (загрузка, Wi-Fi, ошибки потока) — на русском. Ошибки проверки настроек —
+  на английском: страница строит элементы управления по пределам и никогда не отправляет значения
+  вне диапазона, так что эти ошибки — для разработчиков.
+- Пины — только в `board.h`, общие имена — только в `app_config.h`.

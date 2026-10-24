@@ -1,54 +1,53 @@
-# cspot for the New Year star
+# cspot для новогодней звезды
 
-Spotify Connect library, copied from upstream and trimmed to what the star uses:
+Библиотека Spotify Connect, скопированная из upstream и урезанная до того, что использует звезда:
 
-| Directory | Source | Commit |
+| Каталог | Источник | Коммит |
 |---|---|---|
-| `cspot/` | [philippe44/cspot](https://github.com/philippe44/cspot) (the fork squeezelite-esp32 uses; [feelfreelinux/cspot](https://github.com/feelfreelinux/cspot) is unmaintained) | `99e5c95ad6d862a1b7845dda81fd9c8233b45b9f` |
-| `bell/` | [philippe44/bell](https://github.com/philippe44/bell): utilities, HTTP client, nanopb, Tremor | `46a4a8f21f3b0bc0ccefd01915b24d74f0ab9bef` |
+| `cspot/` | [philippe44/cspot](https://github.com/philippe44/cspot) (форк, который использует squeezelite-esp32; [feelfreelinux/cspot](https://github.com/feelfreelinux/cspot) больше не поддерживается) | `99e5c95ad6d862a1b7845dda81fd9c8233b45b9f` |
+| `bell/` | [philippe44/bell](https://github.com/philippe44/bell): утилиты, HTTP-клиент, nanopb, Tremor | `46a4a8f21f3b0bc0ccefd01915b24d74f0ab9bef` |
 
-License: GPL-3.0 (`LICENSE.md`), nanopb zlib, Tremor BSD.
+Лицензия: GPL-3.0 (`LICENSE.md`), nanopb — zlib, Tremor — BSD.
 
-Left out of bell: codecs and audio sinks (the star has its own), the web server, MQTT, mDNS
-(the star registers the service itself), nlohmann/json and fmt (`BELL_ONLY_CJSON`,
-`BELL_DISABLE_FMT`), std::regex.
+Из bell не взяты: кодеки и аудиовыходы (у звезды свои), веб-сервер, MQTT, mDNS (звезда сама
+регистрирует сервис), nlohmann/json и fmt (`BELL_ONLY_CJSON`, `BELL_DISABLE_FMT`), std::regex.
 
-## Local changes
+## Локальные изменения
 
-- **Mbed TLS 4 (ESP-IDF 6)**: `bell/main/utilities/Crypto.cpp` uses PSA for SHA-1 and AES-CTR,
-  its own HMAC and PBKDF2 on top of them (`mbedtls_md` refuses HMAC now), the "private" bignum
-  declarations (`MBEDTLS_ALLOW_PRIVATE_ACCESS`) for DH, and the hardware RNG. `TLSSocket` is rewritten on esp-tls, with server certificates checked
-  against the IDF bundle.
-- **Single-core ESP32-C5**: `BellTask.h` maps core 1 to "no affinity".
-- **Task priorities** (`TrackPlayer.cpp`, `TrackQueue.cpp`, `MercurySession.cpp`): 3, below the
-  star's audio output (5) and light music (4), so decoding ahead cannot starve them. The mercury
-  task stack grew from 4 to 10 KB: reconnecting does an HTTPS request.
-- **Robustness**: `AccessKeyFetcher.cpp` catches network errors (they reached the track queue
-  task and aborted), checks the JSON before using it, waits 30 s after a refused token and
-  reports the result through `AccessKeyFetcher::resultHandler`. `LoginBlob.cpp` checks the
-  lengths in an addUser request instead of reading past the buffers, and reports
-  `"deviceType": "SPEAKER"` (the cJSON variant sent the literal "deviceType").
-- **Memory**: `esp_port/` puts the C++ objects (global operator new), nanopb and Tremor
-  allocations in PSRAM first. The default policy keeps blocks under 4 KB in internal RAM, which
-  the star needs for Wi-Fi and the I2S DMA buffers.
-- **Tremor symbols**: esp_audio_codec links its own Tremor, so this copy is renamed with a
-  `cspot_` prefix (`bell/external/tremor/cspot_prefix*.h`).
-- **Protobuf**: the `*.pb.c` / `*.pb.h` files in `cspot/protobuf/` are generated once, so the build
-  needs no Python protobuf package. To regenerate after changing a `.proto`:
+- **Mbed TLS 4 (ESP-IDF 6)**: `bell/main/utilities/Crypto.cpp` использует PSA для SHA-1 и
+  AES-CTR, собственные HMAC и PBKDF2 поверх них (`mbedtls_md` теперь отказывается делать HMAC),
+  «приватные» объявления bignum (`MBEDTLS_ALLOW_PRIVATE_ACCESS`) для DH и аппаратный ГСЧ.
+  `TLSSocket` переписан на esp-tls, сертификаты сервера проверяются по набору из IDF.
+- **Одноядерный ESP32-C5**: `BellTask.h` превращает ядро 1 в «без привязки к ядру».
+- **Приоритеты задач** (`TrackPlayer.cpp`, `TrackQueue.cpp`, `MercurySession.cpp`): 3, ниже
+  вывода звука звезды (5) и цветомузыки (4), чтобы декодирование наперёд не отнимало у них время.
+  Стек задачи mercury вырос с 4 до 10 КБ: при переподключении она делает HTTPS-запрос.
+- **Надёжность**: `AccessKeyFetcher.cpp` ловит сетевые ошибки (они доходили до задачи очереди
+  треков и роняли её), проверяет JSON перед использованием, ждёт 30 с после отказа в токене и
+  сообщает результат через `AccessKeyFetcher::resultHandler`. `LoginBlob.cpp` проверяет длины в
+  запросе addUser, а не читает за пределами буферов, и отправляет `"deviceType": "SPEAKER"`
+  (вариант с cJSON отправлял буквально "deviceType").
+- **Память**: `esp_port/` размещает объекты C++ (глобальный operator new), выделения nanopb и
+  Tremor в первую очередь в PSRAM. Политика по умолчанию оставляет блоки меньше 4 КБ во
+  внутренней RAM, а она нужна звезде для Wi-Fi и буферов I2S DMA.
+- **Символы Tremor**: esp_audio_codec линкует свой Tremor, поэтому эта копия переименована с
+  префиксом `cspot_` (`bell/external/tremor/cspot_prefix*.h`).
+- **Protobuf**: файлы `*.pb.c` / `*.pb.h` в `cspot/protobuf/` сгенерированы один раз, поэтому
+  сборке не нужен Python-пакет protobuf. Чтобы перегенерировать их после изменения `.proto`:
 
   ```sh
   python3 -m venv /tmp/pb && /tmp/pb/bin/pip install protobuf grpcio-tools "setuptools<81"
-  # nanopb 0.4.5 calls reflection.MakeClass, gone from protobuf 5+: use a patched copy
+  # nanopb 0.4.5 вызывает reflection.MakeClass, которого нет в protobuf 5+: берём исправленную копию
   git clone --depth 1 -b 0.4.5 https://github.com/nanopb/nanopb /tmp/nanopb
   sed -i 's/reflection.MakeClass(desc)()/__import__("google.protobuf.message_factory", fromlist=["x"]).GetMessageClass(desc)()/' \
       /tmp/nanopb/generator/nanopb_generator.py
   cd cspot && for p in protobuf/*.proto; do /tmp/pb/bin/python /tmp/nanopb/generator/nanopb_generator.py -I . -D . $p; done
   ```
 
-## Requirements outside the code
+## Что нужно помимо кода
 
-- Spotify Premium on the account that picks the star in the app.
-- A Client ID / Secret of an app from the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)
-  (entered on the star's settings page): since December 2025 cspot gets the token for the audio
-  file locations with the client credentials grant of such an app. Since February 2026 the
-  dashboard needs Premium and allows one development-mode app per developer.
+- Spotify Premium на аккаунте, с которого звезду выбирают в приложении.
+- Client ID / Secret приложения из [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)
+  (вводятся на странице настроек звезды): с декабря 2025 года cspot получает токен для адресов
+  аудиофайлов через client credentials grant такого приложения. С февраля 2026 года для
+  дашборда нужен Premium, и разрешено одно приложение в режиме разработки на разработчика.
