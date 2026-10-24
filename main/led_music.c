@@ -11,6 +11,7 @@
 #define FRAME_MS        10
 #define PEAK_FLOOR      500.0f      /* don't amplify silence / noise */
 #define BAND_FLOOR      100.0f      /* same for the band averages in RGB mode */
+#define IDLE_FADE_MS    300         /* time constant of the glow change into / out of idle */
 #define BAND_CONTRAST   5           /* power on band excitement: higher gives purer colors
                                        (on a test track: 3 - 24% white, 5 - ~10%, 6 - 6%) */
 
@@ -22,10 +23,16 @@ static led_strip_handle_t strip;
 static uint16_t strip_leds;
 static atomic_uint_fast32_t levels[LEVEL_COUNT];
 static atomic_uint_fast32_t override = LED_MUSIC_NO_OVERRIDE;
+static atomic_bool idle;
 
 void led_music_override(uint32_t rgb)
 {
     atomic_store(&override, rgb);
+}
+
+void led_music_set_idle(bool on)
+{
+    atomic_store(&idle, on);
 }
 
 void led_music_set_levels(uint32_t total, uint32_t low, uint32_t mid, uint32_t high)
@@ -76,10 +83,11 @@ static float band_excitement(band_follower_t *b, float level, const dynamics_t *
     return b->fast / (b->avg > BAND_FLOOR ? b->avg : BAND_FLOOR);
 }
 
-static int brightness(const light_settings_t *l, float env)
+/* base: the glow in silence, min_brightness or idle_brightness */
+static int brightness(int base, int max, float env)
 {
     /* gamma ~2 so equal steps in loudness look like equal steps in light */
-    return (int)(l->min_brightness + (l->max_brightness - l->min_brightness) * env * env + 0.5f);
+    return (int)(base + (max - base) * env * env + 0.5f);
 }
 
 /* SPI with DMA instead of RMT: C5 RMT has no DMA and Wi-Fi interrupts would corrupt the WS2812 stream */
@@ -113,6 +121,8 @@ static void led_task(void *arg)
     dynamics_t dyn = { 0 };
     follower_t total = { 0 };
     band_follower_t bands[3] = { 0 };
+    float glow = 0;  /* smoothed base brightness, follows idle on / off */
+    const float glow_k = 1.0f - expf(-(float)FRAME_MS / IDLE_FADE_MS);
     uint32_t version = UINT32_MAX;
     uint32_t shown = UINT32_MAX;
     TickType_t wake = xTaskGetTickCount();
@@ -133,8 +143,12 @@ static void led_task(void *arg)
             shown = UINT32_MAX;
         }
 
+        glow += ((atomic_load(&idle) ? light.idle_brightness : light.min_brightness) - glow) * glow_k;
+        int base = (int)(glow + 0.5f);
+
         int r = 0, g = 0, b = 0;
-        int level = brightness(&light, follow(&total, (float)atomic_load(&levels[LEVEL_TOTAL]), &dyn));
+        int level = brightness(base, light.max_brightness,
+                               follow(&total, (float)atomic_load(&levels[LEVEL_TOTAL]), &dyn));
         switch (light.color) {
         case LIGHT_RED:
             r = level;
@@ -158,7 +172,7 @@ static void led_task(void *arg)
             int ch[3];
             for (int i = 0; i < 3; i++) {
                 float share = w_max > 0 ? w[i] / w_max : 1.0f;
-                ch[i] = light.min_brightness + (int)((level - light.min_brightness) * share + 0.5f);
+                ch[i] = base + (int)((level - base) * share + 0.5f);
             }
             r = ch[0];
             g = ch[1];

@@ -53,6 +53,7 @@ static void set_status(player_status_t s, const char *track)
     status = s;
     strlcpy(status_track, track ? track : "", sizeof(status_track));
     portEXIT_CRITICAL(&status_lock);
+    led_music_set_idle(s == PLAYER_PAUSE || s == PLAYER_WAITING || s == PLAYER_STOPPED);
 }
 
 void player_get_status(player_status_t *s, char track[TRACK_NAME_SIZE])

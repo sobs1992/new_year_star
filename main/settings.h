@@ -32,8 +32,9 @@ typedef enum {
 /* Light music, separate for each player mode */
 typedef struct {
     uint8_t color;             /* light_color_t */
-    uint8_t min_brightness;    /* background glow, also during pauses */
+    uint8_t min_brightness;    /* background glow while playing */
     uint8_t max_brightness;
+    uint8_t idle_brightness;   /* glow in a pause after a track, while waiting for the sensor or stopped */
     uint16_t attack_ms;        /* rise time constant */
     uint16_t release_ms;       /* fall time constant */
     uint16_t gain_halflife_ms; /* auto gain: how fast the peak level is forgotten */

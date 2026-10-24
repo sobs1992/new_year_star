@@ -38,13 +38,14 @@ static const limit_t LED_LIMITS[] = {
     { "count", 1, SETTINGS_MAX_LEDS },
 };
 
-enum { L_MIN, L_MAX, L_ATTACK, L_RELEASE, L_HALFLIFE };
+enum { L_MIN, L_MAX, L_ATTACK, L_RELEASE, L_HALFLIFE, L_IDLE };
 static const limit_t LIGHT_LIMITS[] = {
     [L_MIN] = { "min_brightness", 0, 255 },
     [L_MAX] = { "max_brightness", 0, 255 },
     [L_ATTACK] = { "attack_ms", 1, 1000 },
     [L_RELEASE] = { "release_ms", 10, 5000 },
     [L_HALFLIFE] = { "gain_halflife_ms", 100, 30000 },
+    [L_IDLE] = { "idle_brightness", 0, 255 }, /* optional, came later: keep it last */
 };
 
 enum { S_GATE, S_SENSITIVITY, S_COOLDOWN };
@@ -88,6 +89,7 @@ static const track_settings_t TRACK_DEFAULTS = {
     .color = LIGHT_RED, \
     .min_brightness = 16, \
     .max_brightness = 160, \
+    .idle_brightness = 0, \
     .attack_ms = 35, \
     .release_ms = 330, \
     .gain_halflife_ms = 2800, \
@@ -251,11 +253,17 @@ static bool parse_track(const cJSON *jt, track_settings_t *t, char *err, size_t 
     return true;
 }
 
-/* "color" is optional: settings saved before it existed keep the current one */
+/* Optional, settings saved before they existed: "color" keeps the current one,
+ * "idle_brightness" is 0 (dark) */
 static bool parse_light(const cJSON *jl, light_settings_t *l, char *err, size_t err_len)
 {
     int v[ARRAY_SIZE(LIGHT_LIMITS)];
-    if (!read_ints(jl, LIGHT_LIMITS, ARRAY_SIZE(LIGHT_LIMITS), v, err, err_len)) {
+    if (!read_ints(jl, LIGHT_LIMITS, L_IDLE, v, err, err_len)) {
+        return false;
+    }
+    v[L_IDLE] = 0;
+    if (cJSON_GetObjectItem(jl, LIGHT_LIMITS[L_IDLE].key) &&
+        !read_ints(jl, &LIGHT_LIMITS[L_IDLE], 1, &v[L_IDLE], err, err_len)) {
         return false;
     }
     if (v[L_MIN] > v[L_MAX]) {
@@ -272,6 +280,7 @@ static bool parse_light(const cJSON *jl, light_settings_t *l, char *err, size_t 
     }
     l->min_brightness = v[L_MIN];
     l->max_brightness = v[L_MAX];
+    l->idle_brightness = v[L_IDLE];
     l->attack_ms = v[L_ATTACK];
     l->release_ms = v[L_RELEASE];
     l->gain_halflife_ms = v[L_HALFLIFE];
@@ -761,6 +770,7 @@ char *settings_to_json(bool for_ui)
         cJSON_AddStringToObject(jl, "color", COLOR_NAMES[l->color]);
         cJSON_AddNumberToObject(jl, "min_brightness", l->min_brightness);
         cJSON_AddNumberToObject(jl, "max_brightness", l->max_brightness);
+        cJSON_AddNumberToObject(jl, "idle_brightness", l->idle_brightness);
         cJSON_AddNumberToObject(jl, "attack_ms", l->attack_ms);
         cJSON_AddNumberToObject(jl, "release_ms", l->release_ms);
         cJSON_AddNumberToObject(jl, "gain_halflife_ms", l->gain_halflife_ms);
