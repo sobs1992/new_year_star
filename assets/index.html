@@ -51,7 +51,7 @@
 
   .player { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
   #now { flex: 1; min-width: 180px; margin: 0; font-weight: 600; }
-  .player .row { flex: none; }
+  .player .row { flex: 0 1 auto; flex-wrap: wrap; } /* three buttons do not fit a phone in a line */
   .mode { margin-top: 14px; }
   #errors { margin: 10px 0 0; padding: 0; list-style: none; color: var(--accent); font-size: 14px; }
   #errors li + li { margin-top: 4px; }
@@ -198,6 +198,7 @@
       <div class="row">
         <button class="primary" id="btn-start" disabled>Старт</button>
         <button id="btn-stop" disabled>Стоп</button>
+        <button id="btn-next" data-mode="radio" hidden>Следующая станция</button>
       </div>
     </div>
     <ul id="errors"></ul>
@@ -365,6 +366,7 @@
 
   let settings = null;
   let saveTimer = null;
+  let saving = false;
   let statusTimer = null;
   let lightSliders = {};
   let wifiPrefilled = false;
@@ -710,6 +712,7 @@
     const full = radio.stations.length >= settings.limits.max_stations;
     document.getElementById('add-station').disabled = full;
     document.getElementById('add-presets').disabled = full || missingPresets().length === 0;
+    document.getElementById('btn-next').disabled = radio.stations.length < 2;
   }
 
   function addStation() {
@@ -965,6 +968,7 @@
     }
     showStatus('Сохранение…', '', true);
     const { limits, storage, station_presets, ...body } = settings;
+    saving = true;
     try {
       const result = await postJson('/api/settings', body);
       settings.revision = result.revision;
@@ -978,6 +982,7 @@
         showStatus('Не сохранено: ' + e.message, 'error', true);
       }
     }
+    saving = false;
   }
 
   /* ---------- start / stop ---------- */
@@ -1090,6 +1095,10 @@
     clearTimeout(pollStatus.timer);
     try {
       const st = await api('/api/status');
+      /* Changed elsewhere (the BOOT button, another page): show it, unless this page has an edit on its way */
+      if (st.settings_revision !== settings.revision && !saveTimer && !saving) {
+        await load();
+      }
       showPlayer(st.player, st.radio.title);
       showErrors(st.errors);
       showSensor(st.sensor);
@@ -1204,6 +1213,7 @@
   async function init() {
     document.getElementById('btn-start').addEventListener('click', () => control('start'));
     document.getElementById('btn-stop').addEventListener('click', () => control('stop'));
+    document.getElementById('btn-next').addEventListener('click', () => control('next'));
     document.getElementById('add-station').addEventListener('click', addStation);
     document.getElementById('add-presets').addEventListener('click', addPresets);
     document.getElementById('wifi-scan').addEventListener('click', wifiScan);

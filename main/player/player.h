@@ -21,6 +21,9 @@ void player_start(void);
 void player_play(void);
 /* Stop button: silence right away (casting too), ignore the sensor until player_play() */
 void player_stop(void);
+/* Next station button (web page, BOOT): in the radio mode, the next station is selected and
+ * saved; it plays if the radio does. false in the playlist mode or with one station. */
+bool player_next_station(void);
 
 /* track is empty when not applicable */
 void player_get_status(player_status_t *status, char track[TRACK_NAME_SIZE]);

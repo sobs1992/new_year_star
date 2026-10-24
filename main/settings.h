@@ -121,6 +121,9 @@ player_mode_t settings_get_mode(void);
 uint8_t settings_get_playlist_cycles(void);
 /* false when no station is selected */
 bool settings_get_current_station(radio_station_t *out);
+/* Select the station after the current one (after the last: the first) and save, from any
+ * task. false when there are fewer than two stations. */
+bool settings_next_station(void);
 uint8_t settings_get_radio_volume(void);
 uint16_t settings_get_radio_minutes(void);
 

@@ -2,8 +2,9 @@
 
 #include <stdint.h>
 
-/* BOOT button held for 5 s while running: factory reset (settings, home Wi-Fi, access point
- * password; uploaded tracks stay), then reboot. Needs wifi_start() done. */
+/* BOOT button while running. Held for 5 s: factory reset (settings, home Wi-Fi, access point
+ * password; uploaded tracks stay), then reboot. Needs wifi_start() done. A short press (under
+ * 1 s): the next radio station, see player_next_station(). */
 
 void button_init(void);
 

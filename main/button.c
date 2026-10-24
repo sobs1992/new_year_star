@@ -9,8 +9,10 @@
 #include "board.h"
 #include "button.h"
 #include "led_music.h"
+#include "player.h"
 #include "status.h"
 
+#define SHORT_MS        100         /* two polls at least: a single one can be contact bounce */
 #define FEEDBACK_MS     1000        /* start blinking after this, so a short press shows nothing */
 #define RESET_MS        5000
 #define BLINK_MS        250
@@ -44,6 +46,10 @@ void button_poll(uint32_t elapsed_ms)
             ESP_LOGI(TAG, "Released, no reset");
             led_music_override(LED_MUSIC_NO_OVERRIDE);
             status_led_override(-1);
+        } else if (held_ms >= SHORT_MS) {
+            /* Saves the settings in this task: its stack is internal, as NVS needs */
+            ESP_LOGI(TAG, "Short press: %s", player_next_station() ? "next station" :
+                     "not the radio mode or one station only, nothing to switch");
         }
         held_ms = 0;
         return;

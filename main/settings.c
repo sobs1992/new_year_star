@@ -36,6 +36,7 @@ typedef struct {
 } all_settings_t;
 
 static SemaphoreHandle_t lock;
+static SemaphoreHandle_t save_lock; /* save(): the httpd task and the BOOT button's status task */
 static all_settings_t cur;
 static atomic_uint_fast32_t led_version;
 static atomic_uint_fast32_t radar_version;
@@ -495,13 +496,13 @@ out:
     return ok;
 }
 
+/* The JSON is made under save_lock too: one made earlier must not be written after a newer one */
 static void save(void)
 {
+    xSemaphoreTake(save_lock, portMAX_DELAY);
     char *json = settings_to_json(false);
-    if (json == NULL) {
-        return;
-    }
-    if (saved_json && strcmp(saved_json, json) == 0) {
+    if (json == NULL || (saved_json && strcmp(saved_json, json) == 0)) {
+        xSemaphoreGive(save_lock);
         free(json);
         return;
     }
@@ -519,12 +520,14 @@ static void save(void)
         nvs_close(nvs);
     }
     if (ret != ESP_OK) {
+        xSemaphoreGive(save_lock);
         ESP_LOGE(TAG, "Saving to NVS failed: %s", esp_err_to_name(ret));
         free(json);
         return;
     }
     free(saved_json);
     saved_json = json;
+    xSemaphoreGive(save_lock);
 }
 
 static char *load(void)
@@ -566,7 +569,8 @@ static void add_found_track(const char *name, void *ctx)
 void settings_init(void)
 {
     lock = xSemaphoreCreateMutex();
-    assert(lock);
+    save_lock = xSemaphoreCreateMutex();
+    assert(lock && save_lock);
     revision = esp_random();
 
     storage_for_each_track(add_found_track, NULL);
@@ -726,6 +730,20 @@ bool settings_get_current_station(radio_station_t *out)
         *out = cur.radio.stations[cur.radio.current];
     }
     xSemaphoreGive(lock);
+    return ok;
+}
+
+bool settings_next_station(void)
+{
+    xSemaphoreTake(lock, portMAX_DELAY);
+    bool ok = cur.radio.station_count > 1;
+    if (ok) {
+        cur.radio.current = (cur.radio.current + 1) % cur.radio.station_count;
+    }
+    xSemaphoreGive(lock);
+    if (ok) {
+        save();
+    }
     return ok;
 }
 

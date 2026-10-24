@@ -42,7 +42,7 @@ All application code is in `main/`: playback in `main/player/`, Wi-Fi and the HT
 | `led_music` | The LED strip: light music from the audio levels the player feeds it |
 | `sensor` | The radar on UART: target, distance, pushing gate / threshold settings, restarting it when silent |
 | `status` | The yellow LED on the board: blinks the code of the most basic error |
-| `button` | BOOT held 5 s: factory reset; polled by the status task |
+| `button` | BOOT held 5 s: factory reset; a short press: the next radio station; polled by the status task |
 | `sysinfo` | `/system` page data: CPU per task, RAM, PSRAM, temperature |
 | `board.h` | Which GPIO is wired to what |
 | `app_config.h` | Names several modules share: the device name, the NVS namespace |
@@ -119,7 +119,7 @@ are free (`heap.internal_free` in `/api/status`, `/system` has the details). So:
 | `dns_server` | 5 | 4 KB | internal | captive portal |
 | `led_music` | 4 | 4 KB | internal | LED strip, 10 ms frames |
 | `airplay_rtsp` | 4 | 8 KB | PSRAM | AirPlay session |
-| `status` | 3 | 3 KB | internal | yellow LED and BOOT button; the factory reset erases NVS |
+| `status` | 3 | 3 KB | internal | yellow LED and BOOT button; the factory reset erases NVS, the next station saves the settings |
 | `dlna_events`, `ssdp` | 3 | 6 / 4 KB | PSRAM | DLNA events, discovery |
 | `spotify` | 3 | 16 KB | PSRAM | Spotify session |
 | `cspot_player`, `CSpotTrackQueue`, `mercury_dispatcher` | 3 | 48 / 32 / 10 KB | PSRAM | cspot |
@@ -132,9 +132,9 @@ Plus ESP-IDF's own: Wi-Fi, lwIP, mDNS, esp_timer, idle.
 |---|---|
 | `GET /`, `GET /system` | the settings page, the system page |
 | `GET /api/settings`, `POST /api/settings` | the settings document (see above) |
-| `GET /api/status` | live state: player, sensor, Wi-Fi, error codes, radio, casts, heap |
+| `GET /api/status` | live state: player, sensor, Wi-Fi, error codes, radio, casts, heap, the settings revision |
 | `POST /api/tracks?name=x.mp3`, `DELETE /api/tracks?name=x.mp3` | upload (raw body) / delete a track |
-| `POST /api/player` | `{"action": "start"}` or `"stop"`: the buttons |
+| `POST /api/player` | `{"action": "start"}`, `"stop"` or `"next"` (radio station): the buttons |
 | `POST /api/wifi`, `POST /api/wifi/ap`, `GET /api/wifi/scan` | home network, access point password, scan (~11 s) |
 | `GET /api/system` | CPU, memory, temperature, versions |
 | `/dlna/...`, `/spotify_info` | DLNA renderer and Spotify zeroconf, for phones |

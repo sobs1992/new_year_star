@@ -858,6 +858,12 @@ void player_stop(void)
     }
 }
 
+/* Only the selection changes: play_radio() sees another URL and switches over itself */
+bool player_next_station(void)
+{
+    return settings_get_mode() == PLAYER_MODE_RADIO && settings_next_station();
+}
+
 void player_start(void)
 {
     cast_pcm = heap_caps_malloc(CAST_FRAMES * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM);

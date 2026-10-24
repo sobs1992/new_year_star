@@ -153,6 +153,8 @@ static esp_err_t status_get(httpd_req_t *req)
     airplay_status_json(cJSON_AddObjectToObject(root, "airplay"));
     spotify_status_json(cJSON_AddObjectToObject(root, "spotify"));
     sysinfo_heap_json(cJSON_AddObjectToObject(root, "heap"));
+    /* The page reloads the settings when they changed elsewhere (the BOOT button, another page) */
+    cJSON_AddNumberToObject(root, "settings_revision", settings_revision());
     return send_cjson(req, "200 OK", root);
 }
 
@@ -246,22 +248,29 @@ static esp_err_t track_delete(httpd_req_t *req)
     return send_json(req, "200 OK", "{\"ok\":true}");
 }
 
-/* POST /api/player {"action": "start" | "stop"} */
+/* POST /api/player {"action": "start" | "stop" | "next"}; "next": the next radio station */
 static esp_err_t player_post(httpd_req_t *req)
 {
     cJSON *root = read_json_body(req);
     const cJSON *action = cJSON_GetObjectItemCaseSensitive(root, "action");
     bool ok = cJSON_IsString(action);
+    bool switched = true;
     if (ok && strcmp(action->valuestring, "start") == 0) {
         player_play();
     } else if (ok && strcmp(action->valuestring, "stop") == 0) {
         player_stop();
+    } else if (ok && strcmp(action->valuestring, "next") == 0) {
+        switched = player_next_station();
     } else {
         ok = false;
     }
     cJSON_Delete(root);
     if (!ok) {
-        return send_error(req, "400 Bad Request", "action: expected \"start\" or \"stop\"");
+        return send_error(req, "400 Bad Request", "action: expected \"start\", \"stop\" or \"next\"");
+    }
+    if (!switched) {
+        /* The page offers it only then; it can be outdated */
+        return send_error(req, "409 Conflict", "Станцию можно переключить только в режиме радио, если их больше одной");
     }
     return send_json(req, "200 OK", "{\"ok\":true}");
 }

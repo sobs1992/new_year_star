@@ -539,6 +539,49 @@ static void change_listener(void)
     CHECK_EQ_INT(changes, 1);
 }
 
+/* ---------- next station (web page, BOOT button) ---------- */
+
+static void next_station_goes_round_and_saves(void)
+{
+    boot(NULL);
+    cJSON *s = current(false);
+    int n = cJSON_GetArraySize(at(s, "radio.stations"));
+    CHECK(n > 2);
+    uint32_t revision = settings_revision();
+
+    CHECK(settings_next_station());
+    s = current(false);
+    CHECK_JSON(s, "radio.current", "1");
+    CHECK_JSON(s, NULL, stub_nvs_get(NVS_NS, NVS_KEY));
+    CHECK_EQ_INT(settings_revision(), revision + 1);
+
+    for (int i = 2; i < n; i++) {
+        CHECK(settings_next_station());
+    }
+    s = current(false);
+    char last[16];
+    snprintf(last, sizeof(last), "%d", n - 1);
+    CHECK_JSON(s, "radio.current", last);
+    CHECK(settings_next_station()); /* after the last: the first */
+    s = current(false);
+    CHECK_JSON(s, "radio.current", "0");
+    radio_station_t st;
+    CHECK(settings_get_current_station(&st));
+    CHECK_EQ_STR(st.url, cJSON_GetStringValue(at(s, "radio.stations.0.url")));
+}
+
+static void next_station_needs_two(void)
+{
+    boot(NULL);
+    CHECK_EQ_INT(post_change("radio.stations", "[{\"name\":\"A\",\"url\":\"http://a\"}]"), ESP_OK);
+    int writes = stub_nvs_writes;
+    uint32_t revision = settings_revision();
+    CHECK(!settings_next_station());
+    CHECK_JSON(current(false), "radio.current", "0");
+    CHECK_EQ_INT(stub_nvs_writes, writes);
+    CHECK_EQ_INT(settings_revision(), revision);
+}
+
 /* ---------- track list ---------- */
 
 static void tracks_are_added_and_removed(void)
@@ -600,6 +643,8 @@ int main(void)
         TEST(ui_json_has_limits_and_extras),
         TEST(change_counters),
         TEST(change_listener),
+        TEST(next_station_goes_round_and_saves),
+        TEST(next_station_needs_two),
         TEST(tracks_are_added_and_removed),
         TEST(track_names),
     };
