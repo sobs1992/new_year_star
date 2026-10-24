@@ -869,7 +869,6 @@ void player_stop(void)
 
 void player_start(void)
 {
-    radio_init();
     cast_pcm = heap_caps_malloc(CAST_FRAMES * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM);
     assert(cast_pcm);
     /* MP3/AAC decoder needs more stack than the default main task has */

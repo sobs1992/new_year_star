@@ -36,7 +36,8 @@ typedef struct {
     char error[96];
 } radio_status_t;
 
-void radio_init(void);
+/* Allocate the buffer, start the network task */
+void radio_start(void);
 
 /* Switch to a stream (empty url stops). live: a radio station, reconnected forever; otherwise
  * a file, received once (RADIO_ENDED / RADIO_ERROR), from byte offset on. mime_hint (may be

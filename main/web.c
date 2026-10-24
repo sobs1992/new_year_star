@@ -8,7 +8,6 @@
 #include "esp_netif.h" /* dns_server.h needs its types */
 #include "cJSON.h"
 #include "airplay.h"
-#include "dlna.h"
 #include "spotify.h"
 #include "dns_server.h"
 #include "player.h"
@@ -380,20 +379,17 @@ static httpd_handle_t http_start(void)
     return server;
 }
 
-void web_start(void)
+httpd_handle_t web_start(void)
 {
     /* Redirected foreign traffic makes these noisy */
     esp_log_level_set("httpd_uri", ESP_LOG_ERROR);
     esp_log_level_set("httpd_txrx", ESP_LOG_ERROR);
     esp_log_level_set("httpd_parse", ESP_LOG_ERROR);
 
-    sysinfo_start();
     httpd_handle_t server = http_start();
-    dlna_start(server);
-    airplay_start();
-    spotify_start(server);
 
     /* Answer every DNS query with our IP, so any site opens the portal */
     dns_server_config_t dns_cfg = DNS_SERVER_CONFIG_SINGLE("*", "WIFI_AP_DEF");
     start_dns_server(&dns_cfg);
+    return server;
 }

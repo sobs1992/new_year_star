@@ -394,7 +394,7 @@ static void radio_task(void *arg)
     }
 }
 
-void radio_init(void)
+void radio_start(void)
 {
     ring = heap_caps_malloc(RING_SIZE, MALLOC_CAP_SPIRAM);
     ring_lock = xSemaphoreCreateMutex();
