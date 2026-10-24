@@ -39,7 +39,7 @@ captive portal DNS server. `app_main()` in `new_year_star.c` starts the modules 
 | `airplay` | AirPlay 1 (RAOP) receiver: RTSP, RTP, ALAC, jitter buffer |
 | `spotify` | Spotify Connect over cspot: zeroconf login, decoded audio ring |
 | `status` | The yellow LED on the board: blinks the code of the most basic error |
-| `button` | BOOT held 5 s: factory reset |
+| `button` | BOOT held 5 s: factory reset; polled by the status task |
 | `sysinfo` | `/system` page data: CPU per task, RAM, PSRAM, temperature |
 | `board.h` | Which GPIO is wired to what |
 | `app_config.h` | Names several modules share: the device name, the NVS namespace |
@@ -89,7 +89,7 @@ the radar re-read only when `settings_led_version()` / `settings_radar_version()
 ## Tasks and memory
 
 Internal RAM, not PSRAM, is what runs out: the I2S DMA buffers and Wi-Fi need it, and with a
-few KB less the I2S channel cannot be set up. While the radio plays about 44 KB of internal RAM
+few KB less the I2S channel cannot be set up. While the radio plays about 47 KB of internal RAM
 are free (`heap.internal_free` in `/api/status`, `/system` has the details). So:
 
 - Big buffers go to PSRAM (`heap_caps_malloc(..., MALLOC_CAP_SPIRAM)`); a plain `malloc()`
@@ -109,11 +109,10 @@ are free (`heap.internal_free` in `/api/status`, `/system` has the details). So:
 | `dns_server` | 5 | 4 KB | internal | captive portal |
 | `led_music` | 4 | 4 KB | internal | LED strip, 10 ms frames |
 | `airplay_rtsp` | 4 | 8 KB | PSRAM | AirPlay session |
-| `button` | 3 | 3 KB | internal | BOOT button; factory reset erases NVS |
+| `status` | 3 | 3 KB | internal | yellow LED and BOOT button; the factory reset erases NVS |
 | `dlna_events`, `ssdp` | 3 | 6 / 4 KB | PSRAM | DLNA events, discovery |
 | `spotify` | 3 | 16 KB | PSRAM | Spotify session |
 | `cspot_player`, `CSpotTrackQueue`, `mercury_dispatcher` | 3 | 48 / 32 / 10 KB | PSRAM | cspot |
-| `status` | 2 | 3 KB | internal | yellow LED |
 
 Plus ESP-IDF's own: Wi-Fi, lwIP, mDNS, esp_timer, idle.
 

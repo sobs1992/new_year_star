@@ -3,7 +3,8 @@
 #include <stdint.h>
 
 /* Yellow user LED on the board: steady on when all is fine, otherwise blinks the code of the
- * most important error (fewest blinks), pause, repeat. */
+ * most important error (fewest blinks), pause, repeat. Its task also polls the BOOT button
+ * (button_poll). */
 
 typedef enum {
     STATUS_ERR_STORAGE = 1, /* track storage did not mount */
@@ -20,5 +21,5 @@ struct cJSON;
 /* "errors" of /api/status: the codes of the active errors, an array */
 void status_errors_json(struct cJSON *array);
 
-/* Let another module drive the LED (factory reset countdown): 0 off, 1 on, -1 give it back */
+/* Let the button drive the LED (factory reset countdown): 0 off, 1 on, -1 give it back */
 void status_led_override(int state);

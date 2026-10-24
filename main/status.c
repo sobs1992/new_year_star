@@ -7,6 +7,7 @@
 #include "esp_timer.h"
 #include "cJSON.h"
 #include "board.h"
+#include "button.h"
 #include "player.h"
 #include "radio.h"
 #include "sensor.h"
@@ -83,6 +84,7 @@ static void status_task(void *arg)
     uint32_t phase = 0; /* ms into the sequence */
 
     for (;;) {
+        button_poll(TICK_MS); /* may override the LED */
         uint32_t e = check_errors();
         uint32_t old = atomic_exchange(&errors, e);
         if (e != old) {
@@ -121,7 +123,8 @@ void status_start(void)
     };
     ESP_ERROR_CHECK(gpio_config(&out));
     led(true);
-    xTaskCreate(status_task, "status", 3072, NULL, 2, NULL);
+    /* Priority of the button it polls: a hold must be seen under load too */
+    xTaskCreate(status_task, "status", 3072, NULL, 3, NULL);
 }
 
 void status_errors_json(cJSON *array)

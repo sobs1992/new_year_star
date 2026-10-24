@@ -29,7 +29,7 @@ void app_main(void)
     led_music_start();
     sensor_start();
     wifi_start(); /* also mDNS, where AirPlay and Spotify announce themselves */
-    button_start();
+    button_init(); /* polled by the status task */
     radio_start();
     player_start();
     sysinfo_start();
