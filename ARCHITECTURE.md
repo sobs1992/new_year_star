@@ -21,7 +21,8 @@ Partitions (`partitions.csv`): NVS, the app (2.5 MB, ~13 % free) and LittleFS wi
 
 ## Modules
 
-All application code is in `main/`: playback in `main/player/`, the rest at the top level.
+All application code is in `main/`: playback in `main/player/`, Wi-Fi and the HTTP server in
+`main/web/`, the rest at the top level.
 `components/` holds the vendored cspot (Spotify) and the captive portal DNS server.
 `app_main()` in `new_year_star.c` starts the modules in order.
 
@@ -35,10 +36,10 @@ All application code is in `main/`: playback in `main/player/`, the rest at the 
 | `player/dlna` | UPnP media renderer: SSDP, SOAP control, GENA events |
 | `player/airplay` | AirPlay 1 (RAOP) receiver: RTSP, RTP, ALAC, jitter buffer |
 | `player/spotify` | Spotify Connect over cspot: zeroconf login, decoded audio ring |
+| `web/wifi` | Access point, home network, mDNS (`star.local`), scanning |
+| `web/web` | HTTP server: the pages (`assets/*.html`, embedded), the JSON API, the captive portal |
 | `led_music` | The LED strip: light music from the audio levels the player feeds it |
 | `sensor` | The radar on UART: target, distance, pushing gate / threshold settings |
-| `wifi` | Access point, home network, mDNS (`star.local`), scanning |
-| `web` | HTTP server: the pages (`assets/*.html`, embedded) and the JSON API |
 | `status` | The yellow LED on the board: blinks the code of the most basic error |
 | `button` | BOOT held 5 s: factory reset; polled by the status task |
 | `sysinfo` | `/system` page data: CPU per task, RAM, PSRAM, temperature |

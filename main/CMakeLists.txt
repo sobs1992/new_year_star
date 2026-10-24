@@ -1,9 +1,11 @@
 idf_component_register(SRCS "new_year_star.c" "button.c" "led_music.c" "sensor.c" "settings.c"
-                            "status.c" "storage.c" "sysinfo.c" "tracks.c" "web.c" "wifi.c"
+                            "status.c" "storage.c" "sysinfo.c" "tracks.c"
                             # Playback: what plays and the sources it plays from
                             "player/player.c" "player/stream.c"
                             "player/dlna.c" "player/airplay.c" "player/spotify.cpp"
-                    INCLUDE_DIRS "." "player"
+                            # Wi-Fi and the HTTP server with the pages and the API
+                            "web/wifi.c" "web/web.c"
+                    INCLUDE_DIRS "." "player" "web"
                     REQUIRES esp_driver_gpio esp_driver_i2s esp_driver_uart esp_wifi esp_netif esp_event
                              esp_http_client esp_http_server esp_timer mbedtls nvs_flash dns_server cspot
                              esp_driver_tsens esp_app_format spi_flash
