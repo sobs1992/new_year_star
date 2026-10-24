@@ -31,7 +31,9 @@ static size_t ring_count;
 static SemaphoreHandle_t ring_lock;
 
 static SemaphoreHandle_t req_lock;
-static char wanted_url[RADIO_URL_SIZE];
+static char wanted_url[STREAM_URL_SIZE];
+static char wanted_mime[48];
+static bool wanted_live;
 static uint32_t wanted_gen;
 static radio_status_t status;
 static TaskHandle_t task;
@@ -113,11 +115,54 @@ static bool parse_playlist(char *body, char *url, size_t url_len)
     return false;
 }
 
-/* Connect, follow redirects and playlists, then pump the stream into the ring until the
- * request changes (returns NULL) or something fails (returns the reason) */
-static const char *stream(const char *start_url, uint32_t gen)
+static void lower(char *s)
 {
-    static char url[RADIO_URL_SIZE];
+    for (; *s; s++) {
+        *s = tolower((unsigned char)*s);
+    }
+}
+
+/* Format from the MIME type, else from the file extension in the URL */
+static bool detect_codec(const char *mime, const char *url, radio_codec_t *out)
+{
+    static const struct {
+        const char *mime_part;
+        const char *ext;
+        radio_codec_t codec;
+    } FORMATS[] = {
+        { "flac", ".flac", RADIO_CODEC_FLAC },
+        { "wav", ".wav", RADIO_CODEC_WAV },
+        { "audio/mp4", ".m4a", RADIO_CODEC_M4A },
+        { "m4a", ".m4a", RADIO_CODEC_M4A },
+        { "aac", ".aac", RADIO_CODEC_AAC },
+        { "mp4a", ".aacp", RADIO_CODEC_AAC },
+        { "mpeg", ".mp3", RADIO_CODEC_MP3 },
+        { "mp3", ".mp3", RADIO_CODEC_MP3 },
+    };
+    for (size_t i = 0; mime[0] && i < sizeof(FORMATS) / sizeof(FORMATS[0]); i++) {
+        if (strstr(mime, FORMATS[i].mime_part)) {
+            *out = FORMATS[i].codec;
+            return true;
+        }
+    }
+    char path[STREAM_URL_SIZE];
+    strlcpy(path, url, sizeof(path));
+    path[strcspn(path, "?#")] = '\0';
+    for (size_t i = 0; i < sizeof(FORMATS) / sizeof(FORMATS[0]); i++) {
+        if (ends_with(path, FORMATS[i].ext)) {
+            *out = FORMATS[i].codec;
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Connect, follow redirects and playlists, then pump the stream into the ring until the
+ * request changes (returns NULL), the file ends (returns NULL, *ended) or something fails
+ * (returns the reason) */
+static const char *stream(const char *start_url, const char *mime_hint, uint32_t gen, bool *ended)
+{
+    static char url[STREAM_URL_SIZE];
     static char error[96];
     strlcpy(url, start_url, sizeof(url));
 
@@ -166,8 +211,9 @@ static const char *stream(const char *start_url, uint32_t gen)
         esp_http_client_get_header(client, "Content-Type", &type);
         char content_type[64];
         strlcpy(content_type, type ? type : "", sizeof(content_type));
-        for (char *c = content_type; *c; c++) {
-            *c = tolower((unsigned char)*c);
+        lower(content_type);
+        if (strstr(content_type, "octet-stream")) {
+            content_type[0] = '\0'; /* says nothing about the format */
         }
 
         if (strstr(content_type, "mpegurl") || strstr(content_type, "scpls") ||
@@ -186,23 +232,24 @@ static const char *stream(const char *start_url, uint32_t gen)
             continue;
         }
 
-        radio_codec_t codec;
-        if (strstr(content_type, "aac") || strstr(content_type, "mp4a") ||
-            (!content_type[0] && (ends_with(url, ".aac") || ends_with(url, ".aacp")))) {
-            codec = RADIO_CODEC_AAC;
-        } else if (strstr(content_type, "mpeg") || strstr(content_type, "mp3") || !content_type[0]) {
-            codec = RADIO_CODEC_MP3;
-        } else {
+        radio_codec_t codec = RADIO_CODEC_MP3; /* unknown format: most streams are MP3 */
+        if (!detect_codec(content_type, url, &codec) && !detect_codec(mime_hint, url, &codec) &&
+            content_type[0] && !strstr(content_type, "audio")) {
             esp_http_client_cleanup(client);
             snprintf(error, sizeof(error), "Формат не поддерживается: %.40s", content_type);
             return error;
         }
 
-        ESP_LOGI(TAG, "Streaming %s (%s)", url, codec == RADIO_CODEC_AAC ? "AAC" : "MP3");
+        static const char *const CODEC_NAMES[] = { "MP3", "AAC", "FLAC", "WAV", "M4A" };
+        ESP_LOGI(TAG, "Streaming %s (%s)", url, CODEC_NAMES[codec]);
         set_status(gen, RADIO_STREAMING, codec, NULL);
         fail = NULL;
         while (!changed(gen)) {
             int n = esp_http_client_read(client, (char *)rx_buf, sizeof(rx_buf));
+            if (n == 0 && esp_http_client_is_complete_data_received(client)) {
+                *ended = true;
+                break;
+            }
             if (n <= 0) {
                 fail = "Поток прервался";
                 break;
@@ -224,11 +271,15 @@ static const char *stream(const char *start_url, uint32_t gen)
 static void radio_task(void *arg)
 {
     for (;;) {
-        char url[RADIO_URL_SIZE];
+        static char url[STREAM_URL_SIZE];
+        char mime[sizeof(wanted_mime)];
         xSemaphoreTake(req_lock, portMAX_DELAY);
         strlcpy(url, wanted_url, sizeof(url));
+        strlcpy(mime, wanted_mime, sizeof(mime));
+        bool live = wanted_live;
         uint32_t gen = wanted_gen;
         xSemaphoreGive(req_lock);
+        lower(mime);
 
         ring_reset(); /* before the status names the new generation */
         if (!url[0]) {
@@ -237,20 +288,36 @@ static void radio_task(void *arg)
             continue;
         }
 
-        /* Same request: keep reconnecting, the buffered data stays valid */
+        /* A live stream keeps reconnecting, the buffered data stays valid; a file is
+         * received once (a cast file can also come from a phone on the star's own network) */
         while (!changed(gen)) {
-            if (!wifi_sta_connected()) {
+            if (live && !wifi_sta_connected()) {
                 set_status(gen, RADIO_ERROR, RADIO_CODEC_MP3, "Нет подключения к Wi-Fi");
                 ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1000));
                 continue;
             }
             set_status(gen, RADIO_CONNECTING, RADIO_CODEC_MP3, NULL);
-            const char *error = stream(url, gen);
-            if (error == NULL || changed(gen)) {
+            bool ended = false;
+            const char *error = stream(url, mime, gen, &ended);
+            if (changed(gen)) {
                 break;
             }
-            ESP_LOGW(TAG, "%s: %s", url, error);
-            set_status(gen, RADIO_ERROR, RADIO_CODEC_MP3, error);
+            if (ended) {
+                ESP_LOGI(TAG, "%s received completely", url);
+                radio_status_t st;
+                radio_get_status(&st);
+                set_status(gen, RADIO_ENDED, st.codec, NULL);
+                ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+                break;
+            }
+            ESP_LOGW(TAG, "%s: %s", url, error ? error : "stopped");
+            radio_status_t st;
+            radio_get_status(&st);
+            set_status(gen, RADIO_ERROR, st.codec, error);
+            if (!live) {
+                ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+                break;
+            }
             ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(RETRY_MS));
         }
     }
@@ -264,13 +331,15 @@ void radio_init(void)
     assert(ring && ring_lock && req_lock);
     status.buffer_size = RING_SIZE;
     /* TLS handshakes need a deep stack */
-    xTaskCreate(radio_task, "radio", 8192, NULL, 6, &task);
+    xTaskCreateWithCaps(radio_task, "radio", 8192, NULL, 6, &task, MALLOC_CAP_SPIRAM);
 }
 
-uint32_t radio_play(const char *url)
+uint32_t radio_play(const char *url, const char *mime_hint, bool live)
 {
     xSemaphoreTake(req_lock, portMAX_DELAY);
     strlcpy(wanted_url, url, sizeof(wanted_url));
+    strlcpy(wanted_mime, mime_hint ? mime_hint : "", sizeof(wanted_mime));
+    wanted_live = live;
     uint32_t gen = ++wanted_gen;
     xSemaphoreGive(req_lock);
     xTaskNotifyGive(task);
@@ -279,7 +348,7 @@ uint32_t radio_play(const char *url)
 
 void radio_stop(void)
 {
-    radio_play("");
+    radio_play("", NULL, false);
 }
 
 uint32_t radio_generation(void)

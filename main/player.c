@@ -8,9 +8,12 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/i2s_std.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_audio_dec_default.h"
 #include "esp_audio_simple_dec_default.h"
+#include "airplay.h"
+#include "dlna.h"
 #include "led_music.h"
 #include "player.h"
 #include "radio.h"
@@ -68,27 +71,33 @@ bool player_is_playing(const char *name)
 
 static i2s_chan_handle_t tx_chan;
 static uint32_t i2s_rate;
-static uint8_t i2s_channels;
+static int16_t *stereo_buf; /* mono input widened to stereo */
+static size_t stereo_size;
 
-static void i2s_start(uint32_t sample_rate, uint8_t channels)
+/* The channel is created once, always stereo: mono is widened in software. Recreating it per
+ * format would reallocate the DMA buffers and fragment the internal RAM. A new sample rate
+ * only reconfigures the clock. */
+static void i2s_start(uint32_t sample_rate)
 {
-    if (tx_chan && sample_rate == i2s_rate && channels == i2s_channels) {
+    if (tx_chan && sample_rate == i2s_rate) {
         return;
     }
     if (tx_chan) {
-        i2s_channel_disable(tx_chan);
-        i2s_del_channel(tx_chan);
-        tx_chan = NULL;
+        i2s_std_clk_config_t clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(sample_rate);
+        ESP_ERROR_CHECK(i2s_channel_disable(tx_chan));
+        ESP_ERROR_CHECK(i2s_channel_reconfig_std_clock(tx_chan, &clk_cfg));
+        ESP_ERROR_CHECK(i2s_channel_enable(tx_chan));
+        i2s_rate = sample_rate;
+        return;
     }
 
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
     chan_cfg.auto_clear = true; /* send silence instead of stale data on underrun */
     ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, &tx_chan, NULL));
 
-    i2s_slot_mode_t mode = channels == 1 ? I2S_SLOT_MODE_MONO : I2S_SLOT_MODE_STEREO;
     i2s_std_config_t std_cfg = {
         .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(sample_rate),
-        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, mode),
+        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
         .gpio_cfg = {
             .mclk = I2S_GPIO_UNUSED,
             .bclk = I2S_BCLK_GPIO,
@@ -97,13 +106,9 @@ static void i2s_start(uint32_t sample_rate, uint8_t channels)
             .din = I2S_GPIO_UNUSED,
         },
     };
-    /* MAX98357 with SD floating plays (L+R)/2, so mono goes to both slots */
-    std_cfg.slot_cfg.slot_mask = I2S_STD_SLOT_BOTH;
-
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(tx_chan, &std_cfg));
     ESP_ERROR_CHECK(i2s_channel_enable(tx_chan));
     i2s_rate = sample_rate;
-    i2s_channels = channels;
 }
 
 /* Splits the signal into bass / mids / treble for the RGB light music with two one-pole
@@ -155,6 +160,23 @@ static void play_pcm(int16_t *pcm, size_t size, int volume, int channels)
         pcm[i] = (int16_t)(v > INT16_MAX ? INT16_MAX : v < INT16_MIN ? INT16_MIN : v);
     }
 
+    /* MAX98357 with SD floating plays (L+R)/2: mono goes to both slots */
+    if (channels == 1) {
+        if (stereo_size < size * 2) {
+            int16_t *bigger = heap_caps_realloc(stereo_buf, size * 2, MALLOC_CAP_SPIRAM);
+            if (bigger == NULL) {
+                return;
+            }
+            stereo_buf = bigger;
+            stereo_size = size * 2;
+        }
+        for (size_t i = 0; i < count; i++) {
+            stereo_buf[2 * i] = stereo_buf[2 * i + 1] = pcm[i];
+        }
+        pcm = stereo_buf;
+        size *= 2;
+    }
+
     size_t written;
     ESP_ERROR_CHECK(i2s_channel_write(tx_chan, pcm, size, &written, portMAX_DELAY));
 }
@@ -166,6 +188,9 @@ typedef struct audio_source {
     size_t (*read)(struct audio_source *src, uint8_t *buf, size_t len);
     /* Volume percent for the next frame, or -1 to stop now */
     int (*volume)(struct audio_source *src);
+    /* Progress, kept by decode() */
+    uint64_t frames_played;
+    uint32_t sample_rate;
 } audio_source_t;
 
 /* Decode a source to the speaker; returns false if nothing could be decoded */
@@ -246,8 +271,11 @@ static bool decode(audio_source_t *src)
         }
         esp_audio_simple_dec_info_t info;
         esp_audio_simple_dec_get_info(dec, &info);
-        i2s_start(info.sample_rate, info.channel);
-        play_pcm((int16_t *)frame.buffer, frame.decoded_size, volume, info.channel == 2 ? 2 : 1);
+        i2s_start(info.sample_rate);
+        int channels = info.channel == 2 ? 2 : 1;
+        play_pcm((int16_t *)frame.buffer, frame.decoded_size, volume, channels);
+        src->frames_played += frame.decoded_size / (sizeof(int16_t) * channels);
+        src->sample_rate = info.sample_rate;
         decoded = true;
     }
 
@@ -259,6 +287,23 @@ done:
     free(out);
     led_music_set_levels(0, 0, 0, 0);
     return decoded;
+}
+
+static esp_audio_simple_dec_type_t decoder_type(radio_codec_t codec)
+{
+    switch (codec) {
+    case RADIO_CODEC_AAC: return ESP_AUDIO_SIMPLE_DEC_TYPE_AAC;
+    case RADIO_CODEC_FLAC: return ESP_AUDIO_SIMPLE_DEC_TYPE_FLAC;
+    case RADIO_CODEC_WAV: return ESP_AUDIO_SIMPLE_DEC_TYPE_WAV;
+    case RADIO_CODEC_M4A: return ESP_AUDIO_SIMPLE_DEC_TYPE_M4A;
+    default: return ESP_AUDIO_SIMPLE_DEC_TYPE_MP3;
+    }
+}
+
+/* A phone casting (DLNA / AirPlay) takes over from the playlist, the radio and the sensor */
+static bool cast_active(void)
+{
+    return airplay_active() || dlna_get_job(NULL);
 }
 
 /* ---- Playlist: MP3 files from storage ---- */
@@ -279,7 +324,7 @@ static size_t file_read(audio_source_t *src, uint8_t *buf, size_t len)
 static int file_volume(audio_source_t *src)
 {
     track_settings_t ts;
-    if (!running || settings_get_mode() != PLAYER_MODE_PLAYLIST ||
+    if (!running || cast_active() || settings_get_mode() != PLAYER_MODE_PLAYLIST ||
         !settings_find_track(((file_source_t *)src)->name, &ts) || !ts.enabled) {
         return -1;
     }
@@ -305,7 +350,7 @@ static void play_track(const char *name)
 
 static bool playlist_keep_playing(void)
 {
-    return running && settings_get_mode() == PLAYER_MODE_PLAYLIST;
+    return running && !cast_active() && settings_get_mode() == PLAYER_MODE_PLAYLIST;
 }
 
 /* vTaskDelay that ends early when keep_playing() turns false */
@@ -361,7 +406,7 @@ typedef struct {
 
 static bool radio_mode_on(void)
 {
-    return running && settings_get_mode() == PLAYER_MODE_RADIO;
+    return running && !cast_active() && settings_get_mode() == PLAYER_MODE_RADIO;
 }
 
 static bool radio_keep_playing(radio_source_t *rs)
@@ -423,7 +468,7 @@ static void play_radio(TickType_t deadline)
             .buffering = true,
         };
         strlcpy(rs.url, station.url, sizeof(rs.url));
-        rs.generation = radio_play(rs.url);
+        rs.generation = radio_play(rs.url, NULL, true);
         set_status(PLAYER_RADIO, station.name);
         ESP_LOGI(TAG, "Radio: %s", station.name);
 
@@ -439,8 +484,7 @@ static void play_radio(TickType_t deadline)
         if (!radio_keep_playing(&rs)) {
             continue;
         }
-        rs.base.type = st.codec == RADIO_CODEC_AAC ? ESP_AUDIO_SIMPLE_DEC_TYPE_AAC
-                                                   : ESP_AUDIO_SIMPLE_DEC_TYPE_MP3;
+        rs.base.type = decoder_type(st.codec);
         if (!decode(&rs.base) && radio_keep_playing(&rs)) {
             ESP_LOGW(TAG, "%s: stream could not be decoded", station.name);
         }
@@ -451,6 +495,128 @@ static void play_radio(TickType_t deadline)
     radio_stop();
 }
 
+/* ---- Casting ---- */
+
+/* Phone volume 0..100 to our gain in percent: squared, so the phone's slider feels even */
+static int cast_gain(uint8_t volume)
+{
+    return volume * volume / 100;
+}
+
+typedef struct {
+    audio_source_t base;
+    dlna_job_t job;
+} dlna_source_t;
+
+/* The job is still the one being played; paused (may be NULL) tells if it is on hold */
+static bool dlna_current(const dlna_source_t *ds, bool *paused)
+{
+    static dlna_job_t now; /* holds a long URL; only the player task calls this */
+    if (airplay_active() || !dlna_get_job(&now) || now.generation != ds->job.generation) {
+        return false;
+    }
+    if (paused) {
+        *paused = now.paused;
+    }
+    return true;
+}
+
+/* Holds while paused; 0 at the end of the file or when the phone moves on */
+static size_t dlna_source_read(audio_source_t *src, uint8_t *buf, size_t len)
+{
+    dlna_source_t *ds = (dlna_source_t *)src;
+    for (;;) {
+        bool paused;
+        if (!dlna_current(ds, &paused)) {
+            return 0;
+        }
+        radio_status_t st;
+        radio_get_status(&st);
+        if (!paused && st.buffered > 0) {
+            return radio_read(buf, len);
+        }
+        if (st.buffered == 0 && (st.state == RADIO_ENDED || st.state == RADIO_ERROR)) {
+            return 0;
+        }
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+}
+
+static int dlna_source_volume(audio_source_t *src)
+{
+    dlna_source_t *ds = (dlna_source_t *)src;
+    if (!dlna_current(ds, NULL)) {
+        return -1;
+    }
+    if (src->sample_rate) {
+        dlna_set_position(ds->job.generation, src->frames_played * 1000 / src->sample_rate);
+    }
+    return dlna_muted() ? 0 : cast_gain(dlna_volume());
+}
+
+static void play_dlna(void)
+{
+    static dlna_source_t ds;
+    if (!dlna_get_job(&ds.job)) {
+        return;
+    }
+    ds.base = (audio_source_t){ .read = dlna_source_read, .volume = dlna_source_volume };
+    uint32_t gen = radio_play(ds.job.url, ds.job.mime, false);
+    set_status(PLAYER_CAST, ds.job.title[0] ? ds.job.title : "DLNA");
+    ESP_LOGI(TAG, "DLNA: %s", ds.job.title[0] ? ds.job.title : ds.job.url);
+
+    /* The format is known once connected */
+    radio_status_t st;
+    for (;;) {
+        if (!dlna_current(&ds, NULL)) {
+            radio_stop();
+            return;
+        }
+        radio_get_status(&st);
+        if (st.generation == gen && st.state != RADIO_CONNECTING && st.state != RADIO_STOPPED) {
+            break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(TRIGGER_POLL_MS));
+    }
+    bool failed = st.state == RADIO_ERROR && st.buffered == 0;
+    if (!failed) {
+        ds.base.type = decoder_type(st.codec);
+        failed = !decode(&ds.base);
+    }
+    radio_stop();
+    dlna_finished(ds.job.generation, failed); /* ignored if the phone moved on meanwhile */
+}
+
+static void play_airplay(void)
+{
+    static int16_t pcm[352 * 2]; /* one AirPlay packet: 352 stereo frames */
+    set_status(PLAYER_CAST, "AirPlay");
+    ESP_LOGI(TAG, "AirPlay");
+    i2s_start(44100);
+    while (airplay_active()) {
+        size_t frames = airplay_read(pcm, 352, 100);
+        if (frames) {
+            play_pcm(pcm, frames * 2 * sizeof(int16_t), cast_gain(airplay_volume()), 2);
+        }
+    }
+    led_music_set_levels(0, 0, 0, 0);
+}
+
+/* Play whatever phones cast until they stop; true if anything was cast */
+static bool play_cast(void)
+{
+    bool played = false;
+    while (cast_active()) {
+        played = true;
+        if (airplay_active()) {
+            play_airplay();
+        } else {
+            play_dlna();
+        }
+    }
+    return played;
+}
+
 /* ---- Main loop ---- */
 
 /* Block while stopped. With the sensor enabled, also until it sees a target and the
@@ -459,6 +625,9 @@ static void wait_for_trigger(bool first_cycle, TickType_t cycle_end)
 {
     bool waiting = false;
     for (;;) {
+        if (cast_active()) {
+            return;
+        }
         if (!running) {
             if (status != PLAYER_STOPPED) {
                 ESP_LOGI(TAG, "Stopped");
@@ -503,8 +672,17 @@ static void player_task(void *arg)
     TickType_t cycle_end = 0;
 
     for (;;) {
+        if (play_cast()) {
+            /* Back to the own mode; with the sensor it waits for it again */
+            cycle_end = xTaskGetTickCount();
+            first_cycle = false;
+            continue;
+        }
         wait_for_trigger(first_cycle, cycle_end);
         first_cycle = false;
+        if (cast_active()) {
+            continue;
+        }
 
         bool played = true;
         if (settings_get_mode() == PLAYER_MODE_RADIO) {
@@ -541,6 +719,8 @@ void player_play(void)
 void player_stop(void)
 {
     atomic_store(&running, false);
+    dlna_stop();
+    airplay_stop();
 }
 
 void player_start(void)

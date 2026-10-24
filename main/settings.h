@@ -74,6 +74,12 @@ typedef struct {
     uint16_t sensor_minutes; /* how long to play after a sensor trigger */
 } radio_settings_t;
 
+/* Casting from phones */
+typedef struct {
+    bool dlna;    /* DLNA / UPnP media renderer, mostly Android */
+    bool airplay; /* AirPlay 1, iPhone / Mac */
+} cast_settings_t;
+
 /* Scan the MP3 files in storage, then load settings from NVS or fall back to defaults.
  * Needs nvs_flash_init and storage_init done. */
 void settings_init(void);
@@ -98,6 +104,8 @@ void settings_get_sensor(sensor_settings_t *out);
 /* Changes only when parameters stored in the radar itself change (gate, sensitivity),
  * also by a mode switch to different ones */
 uint32_t settings_radar_version(void);
+
+void settings_get_cast(cast_settings_t *out);
 
 player_mode_t settings_get_mode(void);
 /* false when no station is selected */

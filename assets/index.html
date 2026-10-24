@@ -244,6 +244,12 @@
   </section>
 
   <section>
+    <h2>Трансляция с телефона</h2>
+    <p class="hint">Телефон должен быть в той же сети, что и звезда: в домашней или в сети звезды. Пока идёт трансляция, плейлист и радио молчат, а после неё продолжают.</p>
+    <div id="cast"></div>
+  </section>
+
+  <section>
     <h2>Wi-Fi</h2>
     <p class="hint">Подключите звезду к домашней сети, чтобы слушать радио и открывать эту страницу дома по адресу star.local.</p>
     <div class="live"><span class="dot" id="wifi-dot"></span><span id="wifi-live">—</span></div>
@@ -795,6 +801,23 @@
     }
   }
 
+  /* ---------- casting ---------- */
+
+  function renderCast() {
+    const root = document.getElementById('cast');
+    const cast = settings.cast;
+    root.textContent = '';
+    const item = (key, label, hint) => {
+      root.append(el('div', { className: 'setting' },
+        checkbox(label, cast[key], on => { cast[key] = on; scheduleSave(); }),
+        el('small', { textContent: hint })));
+    };
+    item('dlna', 'DLNA — Android',
+      'В приложении-пульте (BubbleUPnP, Hi-Fi Cast и т. п.) выберите устройство «Новогодняя звезда». Форматы: MP3, AAC, FLAC, WAV');
+    item('airplay', 'AirPlay — iPhone, iPad, Mac',
+      'Пункт управления → значок AirPlay → «Новогодняя звезда». Работает с любым приложением, где есть AirPlay');
+  }
+
   /* ---------- saving ---------- */
 
   function scheduleSave() {
@@ -853,12 +876,13 @@
       playing: 'Играет ' + p.track,
       pause: 'Пауза после ' + p.track,
       radio: 'Радио: ' + p.track,
+      cast: 'Трансляция: ' + p.track,
       waiting: 'Ждёт срабатывания датчика',
       stopped: 'Остановлено',
       idle: settings.mode === 'radio' ? 'Радиостанция не выбрана' : 'Все треки выключены',
     };
     document.getElementById('now').textContent = texts[p.state] || p.state;
-    const active = ['playing', 'pause', 'radio'].includes(p.state);
+    const active = ['playing', 'pause', 'radio', 'cast'].includes(p.state);
     /* With the sensor, "start" while waiting plays right away */
     document.getElementById('btn-start').disabled = active;
     document.getElementById('btn-stop').disabled = p.state === 'stopped';
@@ -1048,6 +1072,7 @@
     renderStations();
     renderRadioFields();
     renderLeds();
+    renderCast();
     applyMode();
     document.getElementById('upload-btn').disabled = false;
     return true;

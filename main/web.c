@@ -4,10 +4,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include "esp_heap_caps.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_netif.h" /* dns_server.h needs its types */
 #include "cJSON.h"
+#include "airplay.h"
+#include "dlna.h"
 #include "dns_server.h"
 #include "player.h"
 #include "radio.h"
@@ -123,6 +126,7 @@ static esp_err_t status_get(httpd_req_t *req)
         [PLAYER_PAUSE] = "pause",
         [PLAYER_RADIO] = "radio",
         [PLAYER_STOPPED] = "stopped",
+        [PLAYER_CAST] = "cast",
     };
     static const char *const TARGETS[] = {
         [SENSOR_TARGET_NONE] = "none",
@@ -181,6 +185,7 @@ static esp_err_t status_get(httpd_req_t *req)
         [RADIO_CONNECTING] = "connecting",
         [RADIO_STREAMING] = "streaming",
         [RADIO_ERROR] = "error",
+        [RADIO_ENDED] = "ended",
     };
     radio_status_t rs;
     radio_get_status(&rs);
@@ -194,10 +199,28 @@ static esp_err_t status_get(httpd_req_t *req)
 
     cJSON *jr = cJSON_AddObjectToObject(root, "radio");
     cJSON_AddStringToObject(jr, "state", RADIO_STATES[rs.state]);
-    cJSON_AddStringToObject(jr, "codec", rs.codec == RADIO_CODEC_AAC ? "AAC" : "MP3");
+    static const char *const CODECS[] = {
+        [RADIO_CODEC_MP3] = "MP3", [RADIO_CODEC_AAC] = "AAC", [RADIO_CODEC_FLAC] = "FLAC",
+        [RADIO_CODEC_WAV] = "WAV", [RADIO_CODEC_M4A] = "M4A",
+    };
+    cJSON_AddStringToObject(jr, "codec", CODECS[rs.codec]);
     cJSON_AddNumberToObject(jr, "buffered", rs.buffered);
     cJSON_AddNumberToObject(jr, "buffer_size", rs.buffer_size);
     cJSON_AddStringToObject(jr, "error", rs.error);
+
+    airplay_stats_t as;
+    airplay_get_stats(&as);
+    cJSON *jair = cJSON_AddObjectToObject(root, "airplay");
+    cJSON_AddNumberToObject(jair, "received", as.received);
+    cJSON_AddNumberToObject(jair, "played", as.played);
+    cJSON_AddNumberToObject(jair, "lost", as.lost);
+    cJSON_AddNumberToObject(jair, "volume", airplay_volume());
+
+    cJSON *jheap = cJSON_AddObjectToObject(root, "heap");
+    cJSON_AddNumberToObject(jheap, "internal_free", heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    cJSON_AddNumberToObject(jheap, "internal_largest", heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+    cJSON_AddNumberToObject(jheap, "internal_min", heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
+    cJSON_AddNumberToObject(jheap, "psram_free", heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
 
     char *json = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
@@ -437,11 +460,12 @@ static esp_err_t redirect_to_portal(httpd_req_t *req, httpd_err_code_t err)
     return httpd_resp_sendstr(req, "Redirect to the star settings");
 }
 
-static void http_start(void)
+static httpd_handle_t http_start(void)
 {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-    cfg.max_open_sockets = 10;
-    cfg.max_uri_handlers = 12;
+    cfg.max_open_sockets = 16;
+    cfg.max_uri_handlers = 20;
+    cfg.uri_match_fn = httpd_uri_match_wildcard; /* /dlna/... handlers */
     cfg.stack_size = 6144;
     cfg.lru_purge_enable = true;
 
@@ -464,6 +488,7 @@ static void http_start(void)
         ESP_ERROR_CHECK(httpd_register_uri_handler(server, &uris[i]));
     }
     ESP_ERROR_CHECK(httpd_register_err_handler(server, HTTPD_404_NOT_FOUND, redirect_to_portal));
+    return server;
 }
 
 void web_start(void)
@@ -473,7 +498,9 @@ void web_start(void)
     esp_log_level_set("httpd_txrx", ESP_LOG_ERROR);
     esp_log_level_set("httpd_parse", ESP_LOG_ERROR);
 
-    http_start();
+    httpd_handle_t server = http_start();
+    dlna_start(server);
+    airplay_start();
 
     /* Answer every DNS query with our IP, so any site opens the portal */
     dns_server_config_t dns_cfg = DNS_SERVER_CONFIG_SINGLE("*", "WIFI_AP_DEF");

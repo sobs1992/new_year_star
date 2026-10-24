@@ -141,6 +141,7 @@ typedef struct {
     sensor_settings_t sensor[PLAYER_MODE_COUNT]; /* by player_mode_t */
     player_mode_t mode;
     radio_settings_t radio;
+    cast_settings_t cast;
 } all_settings_t;
 
 static SemaphoreHandle_t lock;
@@ -353,8 +354,8 @@ static bool parse_radio(const cJSON *jr, radio_settings_t *r, char *err, size_t 
 }
 
 /* Parse into the given copy. Tracks are matched by name: unknown names are skipped (file
- * deleted), tracks missing from the JSON keep their values. "sensor", "radio" and "mode" are
- * optional so settings saved before they existed still load. */
+ * deleted), tracks missing from the JSON keep their values. "sensor", "radio", "mode" and
+ * "cast" are optional so settings saved before they existed still load. */
 static bool parse(const char *json, all_settings_t *s, char *err, size_t err_len)
 {
     cJSON *root = cJSON_Parse(json);
@@ -369,6 +370,7 @@ static bool parse(const char *json, all_settings_t *s, char *err, size_t err_len
     const cJSON *jsensor = cJSON_GetObjectItemCaseSensitive(root, "sensor");
     const cJSON *jradio = cJSON_GetObjectItemCaseSensitive(root, "radio");
     const cJSON *jmode = cJSON_GetObjectItem(root, "mode");
+    const cJSON *jcast = cJSON_GetObjectItemCaseSensitive(root, "cast");
     if (!cJSON_IsArray(jtracks) || !cJSON_IsObject(jled)) {
         snprintf(err, err_len, "expected \"tracks\" array and \"led\" object");
         goto out;
@@ -398,6 +400,10 @@ static bool parse(const char *json, all_settings_t *s, char *err, size_t err_len
         goto out;
     }
     if (jradio && !parse_radio(jradio, &s->radio, err, err_len)) {
+        goto out;
+    }
+    if (jcast && (!read_bool(jcast, "dlna", &s->cast.dlna, err, err_len) ||
+                  !read_bool(jcast, "airplay", &s->cast.airplay, err, err_len))) {
         goto out;
     }
     if (jmode) {
@@ -514,6 +520,7 @@ void settings_init(void)
     cur.sensor[PLAYER_MODE_RADIO] = SENSOR_DEFAULTS;
     cur.mode = PLAYER_MODE_PLAYLIST;
     cur.radio = RADIO_DEFAULTS;
+    cur.cast = (cast_settings_t){ .dlna = true, .airplay = true };
     memcpy(cur.radio.stations, STATION_PRESETS, sizeof(STATION_PRESETS));
     for (size_t i = 0; i < cur.track_count; i++) {
         ESP_LOGI(TAG, "Track: %s, %u bytes", cur.tracks[i].name,
@@ -625,6 +632,13 @@ void settings_get_sensor(sensor_settings_t *out)
 uint32_t settings_radar_version(void)
 {
     return atomic_load(&radar_version);
+}
+
+void settings_get_cast(cast_settings_t *out)
+{
+    xSemaphoreTake(lock, portMAX_DELAY);
+    *out = cur.cast;
+    xSemaphoreGive(lock);
 }
 
 player_mode_t settings_get_mode(void)
@@ -743,6 +757,10 @@ char *settings_to_json(bool for_ui)
     cJSON_AddNumberToObject(jradio, "current", cur.radio.current);
     cJSON_AddNumberToObject(jradio, "volume", cur.radio.volume);
     cJSON_AddNumberToObject(jradio, "sensor_minutes", cur.radio.sensor_minutes);
+
+    cJSON *jcast = cJSON_AddObjectToObject(root, "cast");
+    cJSON_AddBoolToObject(jcast, "dlna", cur.cast.dlna);
+    cJSON_AddBoolToObject(jcast, "airplay", cur.cast.airplay);
     xSemaphoreGive(lock);
 
     if (for_ui) {
@@ -818,6 +836,7 @@ esp_err_t settings_from_json(const char *json, char *err, size_t err_len)
     memcpy(cur.sensor, s.sensor, sizeof(cur.sensor));
     cur.mode = s.mode;
     cur.radio = s.radio;
+    cur.cast = s.cast;
     xSemaphoreGive(lock);
     if (led_changed) {
         atomic_fetch_add(&led_version, 1);
