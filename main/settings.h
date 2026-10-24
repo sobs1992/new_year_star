@@ -9,6 +9,8 @@
 #define SETTINGS_MAX_LEDS   300
 #define TRACK_NAME_SIZE     64  /* bytes incl. '\0', LittleFS name limit */
 
+/* JSON keys, ranges and defaults of the fields below: the field tables in settings.c */
+
 typedef struct {
     bool enabled;
     uint8_t repeat;    /* times in a row */

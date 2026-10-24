@@ -422,7 +422,7 @@ static void post_rejects_invalid_values(void)
     set(doc, "led.playlist.color", "\"red\"");
     set(doc, "sensor.radio.trigger", "1");
     CHECK_EQ_INT(post(doc, err, sizeof(err)), ESP_ERR_INVALID_ARG);
-    CHECK_EQ_STR(err, "radio: trigger: expected \"motion\" or \"presence\"");
+    CHECK_EQ_STR(err, "radio: trigger: expected motion or presence");
     set(doc, "sensor.radio.trigger", "\"motion\"");
     set(doc, "tracks.1.pause_ms", "600001");
     CHECK_EQ_INT(post(doc, err, sizeof(err)), ESP_ERR_INVALID_ARG);

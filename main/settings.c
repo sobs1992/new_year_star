@@ -1,6 +1,7 @@
 #include <ctype.h>
 #include <dirent.h>
 #include <stdatomic.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,118 +20,6 @@
 #define ARRAY_SIZE(a)   (sizeof(a) / sizeof((a)[0]))
 
 static const char *TAG = "settings";
-
-/* Single source of truth for validation and for the web UI controls */
-typedef struct {
-    const char *key;
-    int min;
-    int max;
-} limit_t;
-
-enum { T_REPEAT, T_VOLUME, T_PAUSE };
-static const limit_t TRACK_LIMITS[] = {
-    [T_REPEAT] = { "repeat", 1, 99 },
-    [T_VOLUME] = { "volume", 0, 200 },
-    [T_PAUSE] = { "pause_ms", 0, 600000 },
-};
-
-static const limit_t LED_LIMITS[] = {
-    { "count", 1, SETTINGS_MAX_LEDS },
-};
-
-enum { L_MIN, L_MAX, L_ATTACK, L_RELEASE, L_HALFLIFE, L_IDLE };
-static const limit_t LIGHT_LIMITS[] = {
-    [L_MIN] = { "min_brightness", 0, 255 },
-    [L_MAX] = { "max_brightness", 0, 255 },
-    [L_ATTACK] = { "attack_ms", 1, 1000 },
-    [L_RELEASE] = { "release_ms", 10, 5000 },
-    [L_HALFLIFE] = { "gain_halflife_ms", 100, 30000 },
-    [L_IDLE] = { "idle_brightness", 0, 255 }, /* optional, came later: keep it last */
-};
-
-enum { S_GATE, S_SENSITIVITY, S_COOLDOWN };
-static const limit_t SENSOR_LIMITS[] = {
-    [S_GATE] = { "max_gate", 2, 8 },
-    [S_SENSITIVITY] = { "sensitivity", 0, 100 },
-    [S_COOLDOWN] = { "cooldown_s", 0, 600 },
-};
-
-enum { R_VOLUME, R_MINUTES };
-static const limit_t RADIO_LIMITS[] = {
-    [R_VOLUME] = { "volume", 0, 200 },
-    [R_MINUTES] = { "sensor_minutes", 1, 240 },
-};
-
-static const char *const MODE_NAMES[] = {
-    [PLAYER_MODE_PLAYLIST] = "playlist",
-    [PLAYER_MODE_RADIO] = "radio",
-};
-
-static const char *const COLOR_NAMES[] = {
-    [LIGHT_RED] = "red",
-    [LIGHT_GREEN] = "green",
-    [LIGHT_BLUE] = "blue",
-    [LIGHT_RGB] = "rgb",
-};
-
-static const char *const TRIGGER_NAMES[] = {
-    [SENSOR_TRIGGER_MOTION] = "motion",
-    [SENSOR_TRIGGER_PRESENCE] = "presence",
-};
-
-static const track_settings_t TRACK_DEFAULTS = {
-    .enabled = true,
-    .repeat = 1,
-    .volume = 50,
-    .pause_ms = 1000,
-};
-
-#define LIGHT_DEFAULTS { \
-    .color = LIGHT_RED, \
-    .min_brightness = 16, \
-    .max_brightness = 160, \
-    .idle_brightness = 0, \
-    .attack_ms = 35, \
-    .release_ms = 330, \
-    .gain_halflife_ms = 2800, \
-}
-
-static const led_settings_t LED_DEFAULTS = {
-    .count = 24,
-    .light = { [PLAYER_MODE_PLAYLIST] = LIGHT_DEFAULTS, [PLAYER_MODE_RADIO] = LIGHT_DEFAULTS },
-};
-
-static const sensor_settings_t SENSOR_DEFAULTS = {
-    .enabled = false,
-    .trigger = SENSOR_TRIGGER_MOTION,
-    .max_gate = 6,
-    .sensitivity = 40,
-    .cooldown_s = 30,
-};
-
-/* Also offered in the web UI to add to an existing list */
-static const radio_station_t STATION_PRESETS[] = {
-    { "SomaFM Christmas Lounge", "https://ice6.somafm.com/christmas-128-mp3" },
-    { "Радио Record", "https://radiorecord.hostingradio.ru/rr_main96.aacp" },
-    { "Radio Swiss Jazz", "https://stream.srg-ssr.ch/m/rsj/mp3_128" },
-    { "FIP", "https://icecast.radiofrance.fr/fip-midfi.mp3" },
-    { "Наше Радио", "https://nashe1.hostingradio.ru/nashe-128.mp3" },
-    { "Rock FM", "https://nashe1.hostingradio.ru/rock-128.mp3" },
-    { "Радио Ultra", "https://nashe1.hostingradio.ru/ultra-128.mp3" },
-    { "Record Rock", "https://radiorecord.hostingradio.ru/rock96.aacp" },
-    { "SomaFM Metal Detector", "https://ice6.somafm.com/metal-128-mp3" },
-    { "laut.fm Metal", "https://stream.laut.fm/metal" },
-    { "181.fm Rock 181", "http://listen.181fm.com/181-rock_128k.mp3" },
-};
-_Static_assert(ARRAY_SIZE(STATION_PRESETS) <= RADIO_MAX_STATIONS, "too many station presets");
-
-/* .stations are copied from STATION_PRESETS in settings_init() */
-static const radio_settings_t RADIO_DEFAULTS = {
-    .station_count = ARRAY_SIZE(STATION_PRESETS),
-    .current = 0,
-    .volume = 50,
-    .sensor_minutes = 5,
-};
 
 typedef struct {
     char name[TRACK_NAME_SIZE];
@@ -157,6 +46,307 @@ static char *saved_json; /* last JSON written to NVS, to skip identical writes *
  * are stale too. */
 static uint32_t revision;
 
+/* ---------- field tables ---------- */
+
+/* Every setting is described once, here: JSON key, place in its struct, range, default. The
+ * tables drive the defaults, the validation, the JSON both ways and the limits the web page
+ * builds its controls from. A new field is a struct member plus a line in a table (and its
+ * label in index.html). */
+
+typedef enum {
+    FIELD_INT,  /* number min..max */
+    FIELD_BOOL,
+    FIELD_ENUM, /* one of the strings names[0..max], kept as its index */
+} field_kind_t;
+
+typedef struct {
+    const char *key;
+    field_kind_t kind;
+    size_t offset;
+    size_t size;     /* of the struct member: 1, 2 or 4 bytes, unsigned */
+    int min, max;
+    int def;
+    const char *const *names; /* FIELD_ENUM */
+    bool optional;   /* came later: absent from the JSON, it keeps its value */
+} field_t;
+
+/* A struct the fields belong to */
+typedef struct {
+    const field_t *fields;
+    size_t count;
+    /* Rules across fields, checked after reading them; NULL if none */
+    bool (*check)(const void *value, char *err, size_t err_len);
+} group_t;
+
+#define GROUP(fields_, check_) { .fields = fields_, .count = ARRAY_SIZE(fields_), .check = check_ }
+
+#define MEMBER_SIZE(type, member) sizeof(((type *)0)->member)
+/* Compile error when hi does not fit the (unsigned) member */
+#define FITS(type, member, hi) (0 * sizeof(char[(hi) <= (__typeof__(((type *)0)->member))~0ULL ? 1 : -1]))
+
+/* F_INT(struct, member, min, max, default[, .optional = true]) and the like */
+#define F_INT(type, member, lo, hi, dflt, ...) { \
+    .key = #member, .kind = FIELD_INT, .offset = offsetof(type, member), \
+    .size = MEMBER_SIZE(type, member) + FITS(type, member, hi), \
+    .min = lo, .max = hi, .def = dflt, __VA_ARGS__ }
+#define F_BOOL(type, member, dflt, ...) { \
+    .key = #member, .kind = FIELD_BOOL, .offset = offsetof(type, member), \
+    .size = MEMBER_SIZE(type, member), .max = 1, .def = dflt, __VA_ARGS__ }
+#define F_ENUM(type, member, names_, dflt, ...) { \
+    .key = #member, .kind = FIELD_ENUM, .offset = offsetof(type, member), \
+    .size = MEMBER_SIZE(type, member), .max = ARRAY_SIZE(names_) - 1, .names = names_, \
+    .def = dflt, __VA_ARGS__ }
+
+static const char *const MODE_NAMES[] = {
+    [PLAYER_MODE_PLAYLIST] = "playlist",
+    [PLAYER_MODE_RADIO] = "radio",
+};
+_Static_assert(ARRAY_SIZE(MODE_NAMES) == PLAYER_MODE_COUNT, "a name for every player mode");
+
+static const char *const COLOR_NAMES[] = {
+    [LIGHT_RED] = "red",
+    [LIGHT_GREEN] = "green",
+    [LIGHT_BLUE] = "blue",
+    [LIGHT_RGB] = "rgb",
+};
+
+static const char *const TRIGGER_NAMES[] = {
+    [SENSOR_TRIGGER_MOTION] = "motion",
+    [SENSOR_TRIGGER_PRESENCE] = "presence",
+};
+
+static const field_t TRACK_FIELDS[] = {
+    F_BOOL(track_settings_t, enabled, true),
+    F_INT(track_settings_t, repeat, 1, 99, 1),
+    F_INT(track_settings_t, volume, 0, 200, 50),
+    F_INT(track_settings_t, pause_ms, 0, 600000, 1000),
+};
+
+static const field_t LED_FIELDS[] = {
+    F_INT(led_settings_t, count, 1, SETTINGS_MAX_LEDS, 24),
+};
+
+static const field_t LIGHT_FIELDS[] = {
+    F_ENUM(light_settings_t, color, COLOR_NAMES, LIGHT_RED, .optional = true),
+    F_INT(light_settings_t, min_brightness, 0, 255, 16),
+    F_INT(light_settings_t, max_brightness, 0, 255, 160),
+    F_INT(light_settings_t, idle_brightness, 0, 255, 0, .optional = true),
+    F_INT(light_settings_t, attack_ms, 1, 1000, 35),
+    F_INT(light_settings_t, release_ms, 10, 5000, 330),
+    F_INT(light_settings_t, gain_halflife_ms, 100, 30000, 2800),
+};
+
+static const field_t SENSOR_FIELDS[] = {
+    F_BOOL(sensor_settings_t, enabled, false),
+    F_ENUM(sensor_settings_t, trigger, TRIGGER_NAMES, SENSOR_TRIGGER_MOTION),
+    F_INT(sensor_settings_t, max_gate, 2, 8, 6),
+    F_INT(sensor_settings_t, sensitivity, 0, 100, 40),
+    F_INT(sensor_settings_t, cooldown_s, 0, 600, 30),
+};
+
+/* Plus the stations and the current one, see parse_radio() */
+static const field_t RADIO_FIELDS[] = {
+    F_INT(radio_settings_t, volume, 0, 200, 50),
+    F_INT(radio_settings_t, sensor_minutes, 1, 240, 5),
+};
+
+/* Plus the Spotify app keys, see parse_cast() */
+static const field_t CAST_FIELDS[] = {
+    F_BOOL(cast_settings_t, dlna, true),
+    F_BOOL(cast_settings_t, airplay, true),
+    F_BOOL(cast_settings_t, spotify, true, .optional = true),
+};
+
+static const field_t ROOT_FIELDS[] = {
+    F_ENUM(all_settings_t, mode, MODE_NAMES, PLAYER_MODE_PLAYLIST, .optional = true),
+};
+
+static bool check_light(const void *value, char *err, size_t err_len)
+{
+    const light_settings_t *l = value;
+    if (l->min_brightness > l->max_brightness) {
+        snprintf(err, err_len, "min_brightness is above max_brightness");
+        return false;
+    }
+    return true;
+}
+
+static const group_t TRACK_GROUP = GROUP(TRACK_FIELDS, NULL);
+static const group_t LED_GROUP = GROUP(LED_FIELDS, NULL);
+static const group_t LIGHT_GROUP = GROUP(LIGHT_FIELDS, check_light);
+static const group_t SENSOR_GROUP = GROUP(SENSOR_FIELDS, NULL);
+static const group_t RADIO_GROUP = GROUP(RADIO_FIELDS, NULL);
+static const group_t CAST_GROUP = GROUP(CAST_FIELDS, NULL);
+static const group_t ROOT_GROUP = GROUP(ROOT_FIELDS, NULL);
+
+/* Also offered in the web UI to add to an existing list */
+static const radio_station_t STATION_PRESETS[] = {
+    { "SomaFM Christmas Lounge", "https://ice6.somafm.com/christmas-128-mp3" },
+    { "Радио Record", "https://radiorecord.hostingradio.ru/rr_main96.aacp" },
+    { "Radio Swiss Jazz", "https://stream.srg-ssr.ch/m/rsj/mp3_128" },
+    { "FIP", "https://icecast.radiofrance.fr/fip-midfi.mp3" },
+    { "Наше Радио", "https://nashe1.hostingradio.ru/nashe-128.mp3" },
+    { "Rock FM", "https://nashe1.hostingradio.ru/rock-128.mp3" },
+    { "Радио Ultra", "https://nashe1.hostingradio.ru/ultra-128.mp3" },
+    { "Record Rock", "https://radiorecord.hostingradio.ru/rock96.aacp" },
+    { "SomaFM Metal Detector", "https://ice6.somafm.com/metal-128-mp3" },
+    { "laut.fm Metal", "https://stream.laut.fm/metal" },
+    { "181.fm Rock 181", "http://listen.181fm.com/181-rock_128k.mp3" },
+};
+_Static_assert(ARRAY_SIZE(STATION_PRESETS) <= RADIO_MAX_STATIONS, "too many station presets");
+
+/* ---------- reading and writing fields ---------- */
+
+static int field_get(const void *value, const field_t *f)
+{
+    const uint8_t *p = (const uint8_t *)value + f->offset;
+    if (f->size == 1) {
+        uint8_t v;
+        memcpy(&v, p, sizeof(v));
+        return v;
+    }
+    if (f->size == 2) {
+        uint16_t v;
+        memcpy(&v, p, sizeof(v));
+        return v;
+    }
+    uint32_t v;
+    memcpy(&v, p, sizeof(v));
+    return v;
+}
+
+static void field_set(void *value, const field_t *f, int v)
+{
+    uint8_t *p = (uint8_t *)value + f->offset;
+    if (f->size == 1) {
+        uint8_t x = v;
+        memcpy(p, &x, sizeof(x));
+    } else if (f->size == 2) {
+        uint16_t x = v;
+        memcpy(p, &x, sizeof(x));
+    } else {
+        uint32_t x = v;
+        memcpy(p, &x, sizeof(x));
+    }
+}
+
+/* The value of one JSON item; on failure err says what the key expects */
+static bool read_field(const cJSON *item, const field_t *f, int *out, char *err, size_t err_len)
+{
+    switch (f->kind) {
+    case FIELD_BOOL:
+        if (cJSON_IsBool(item)) {
+            *out = cJSON_IsTrue(item);
+            return true;
+        }
+        snprintf(err, err_len, "%s: expected true/false", f->key);
+        return false;
+    case FIELD_ENUM: {
+        for (int i = 0; cJSON_IsString(item) && i <= f->max; i++) {
+            if (strcmp(item->valuestring, f->names[i]) == 0) {
+                *out = i;
+                return true;
+            }
+        }
+        /* "color: expected red, green, blue or rgb" */
+        size_t len = snprintf(err, err_len, "%s: expected", f->key);
+        for (int i = 0; i <= f->max && len < err_len; i++) {
+            len += snprintf(err + len, err_len - len, "%s %s", i == 0 ? "" : i == f->max ? " or" : ",",
+                            f->names[i]);
+        }
+        return false;
+    }
+    default:
+        if (cJSON_IsNumber(item) && item->valuedouble >= f->min && item->valuedouble <= f->max) {
+            *out = (int)item->valuedouble;
+            return true;
+        }
+        snprintf(err, err_len, "%s: expected a number %d..%d", f->key, f->min, f->max);
+        return false;
+    }
+}
+
+/* The fields of a group from obj into value, a struct of the group */
+static bool read_group(const cJSON *obj, const group_t *g, void *value, char *err, size_t err_len)
+{
+    for (size_t i = 0; i < g->count; i++) {
+        const field_t *f = &g->fields[i];
+        const cJSON *item = cJSON_GetObjectItemCaseSensitive(obj, f->key);
+        int v;
+        if (item == NULL && f->optional) {
+            continue;
+        }
+        if (!read_field(item, f, &v, err, err_len)) {
+            return false;
+        }
+        field_set(value, f, v);
+    }
+    return g->check == NULL || g->check(value, err, err_len);
+}
+
+static void write_group(cJSON *obj, const group_t *g, const void *value)
+{
+    for (size_t i = 0; i < g->count; i++) {
+        const field_t *f = &g->fields[i];
+        int v = field_get(value, f);
+        if (f->kind == FIELD_BOOL) {
+            cJSON_AddBoolToObject(obj, f->key, v);
+        } else if (f->kind == FIELD_ENUM) {
+            cJSON_AddStringToObject(obj, f->key, f->names[v]);
+        } else {
+            cJSON_AddNumberToObject(obj, f->key, v);
+        }
+    }
+}
+
+static void set_defaults(const group_t *g, void *value)
+{
+    for (size_t i = 0; i < g->count; i++) {
+        field_set(value, &g->fields[i], g->fields[i].def);
+    }
+}
+
+/* {"key": [min, max]} of the numbers, for the web page controls */
+static void add_limits(cJSON *parent, const char *name, const group_t *g)
+{
+    cJSON *jg = cJSON_AddObjectToObject(parent, name);
+    for (size_t i = 0; i < g->count; i++) {
+        const field_t *f = &g->fields[i];
+        if (f->kind == FIELD_INT) {
+            int range[2] = { f->min, f->max };
+            cJSON_AddItemToObject(jg, f->key, cJSON_CreateIntArray(range, 2));
+        }
+    }
+}
+
+/* {"playlist": {...}, "radio": {...}}: a struct per player mode, stride bytes apart. Settings
+ * saved before the per-mode split have the fields right in obj (it has legacy_key): they then
+ * apply to both modes. A mode missing from obj keeps its values. */
+static bool read_per_mode(const cJSON *obj, const char *legacy_key, const group_t *g, void *values,
+                          size_t stride, char *err, size_t err_len)
+{
+    bool legacy = cJSON_GetObjectItem(obj, legacy_key) != NULL;
+    for (int m = 0; m < PLAYER_MODE_COUNT; m++) {
+        const cJSON *jm = cJSON_GetObjectItemCaseSensitive(obj, MODE_NAMES[m]);
+        const cJSON *src = cJSON_IsObject(jm) ? jm : legacy ? obj : NULL;
+        char why[64];
+        if (src && !read_group(src, g, (uint8_t *)values + m * stride, why, sizeof(why))) {
+            snprintf(err, err_len, "%s: %s", MODE_NAMES[m], why);
+            return false;
+        }
+    }
+    return true;
+}
+
+static void write_per_mode(cJSON *obj, const group_t *g, const void *values, size_t stride)
+{
+    for (int m = 0; m < PLAYER_MODE_COUNT; m++) {
+        write_group(cJSON_AddObjectToObject(obj, MODE_NAMES[m]), g, (const uint8_t *)values + m * stride);
+    }
+}
+
+/* ---------- the parts the tables do not cover ---------- */
+
 static int find_track(const all_settings_t *s, const char *name)
 {
     for (size_t i = 0; i < s->track_count; i++) {
@@ -167,30 +357,15 @@ static int find_track(const all_settings_t *s, const char *name)
     return -1;
 }
 
-static bool read_ints(const cJSON *obj, const limit_t *limits, size_t n, int *out,
-                      char *err, size_t err_len)
-{
-    for (size_t i = 0; i < n; i++) {
-        const cJSON *item = cJSON_GetObjectItemCaseSensitive(obj, limits[i].key);
-        if (!cJSON_IsNumber(item) || item->valuedouble < limits[i].min ||
-            item->valuedouble > limits[i].max) {
-            snprintf(err, err_len, "%s: expected a number %d..%d",
-                     limits[i].key, limits[i].min, limits[i].max);
-            return false;
-        }
-        out[i] = (int)item->valuedouble;
-    }
-    return true;
-}
-
-static bool read_bool(const cJSON *obj, const char *key, bool *out, char *err, size_t err_len)
+static bool read_string(const cJSON *obj, const char *key, char *out, size_t size,
+                        char *err, size_t err_len)
 {
     const cJSON *item = cJSON_GetObjectItemCaseSensitive(obj, key);
-    if (!cJSON_IsBool(item)) {
-        snprintf(err, err_len, "%s: expected true/false", key);
+    if (!cJSON_IsString(item) || item->valuestring[0] == '\0' || strlen(item->valuestring) >= size) {
+        snprintf(err, err_len, "%s: expected a string of 1..%u bytes", key, (unsigned)size - 1);
         return false;
     }
-    *out = cJSON_IsTrue(item);
+    strlcpy(out, item->valuestring, size);
     return true;
 }
 
@@ -217,152 +392,14 @@ static bool read_spotify_key(const cJSON *obj, const char *key, char out[SPOTIFY
 
 static bool parse_cast(const cJSON *jc, cast_settings_t *c, char *err, size_t err_len)
 {
-    /* "spotify" and the keys came later than the rest */
-    const cJSON *jspotify = cJSON_GetObjectItemCaseSensitive(jc, "spotify");
-    return read_bool(jc, "dlna", &c->dlna, err, err_len) &&
-           read_bool(jc, "airplay", &c->airplay, err, err_len) &&
-           (jspotify == NULL || read_bool(jc, "spotify", &c->spotify, err, err_len)) &&
+    return read_group(jc, &CAST_GROUP, c, err, err_len) &&
            read_spotify_key(jc, "spotify_client_id", c->spotify_client_id, err, err_len) &&
            read_spotify_key(jc, "spotify_client_secret", c->spotify_client_secret, err, err_len);
 }
 
-/* Index of the string obj[key] in names, -1 if absent or not a string */
-static int read_enum(const cJSON *obj, const char *key, const char *const *names, size_t n)
-{
-    const cJSON *item = cJSON_GetObjectItemCaseSensitive(obj, key);
-    for (size_t i = 0; cJSON_IsString(item) && i < n; i++) {
-        if (strcmp(item->valuestring, names[i]) == 0) {
-            return i;
-        }
-    }
-    return -1;
-}
-
-static bool parse_track(const cJSON *jt, track_settings_t *t, char *err, size_t err_len)
-{
-    int v[ARRAY_SIZE(TRACK_LIMITS)];
-    bool enabled;
-    if (!read_bool(jt, "enabled", &enabled, err, err_len) ||
-        !read_ints(jt, TRACK_LIMITS, ARRAY_SIZE(TRACK_LIMITS), v, err, err_len)) {
-        return false;
-    }
-    t->enabled = enabled;
-    t->repeat = v[T_REPEAT];
-    t->volume = v[T_VOLUME];
-    t->pause_ms = v[T_PAUSE];
-    return true;
-}
-
-/* Optional, settings saved before they existed: "color" keeps the current one,
- * "idle_brightness" is 0 (dark) */
-static bool parse_light(const cJSON *jl, light_settings_t *l, char *err, size_t err_len)
-{
-    int v[ARRAY_SIZE(LIGHT_LIMITS)];
-    if (!read_ints(jl, LIGHT_LIMITS, L_IDLE, v, err, err_len)) {
-        return false;
-    }
-    v[L_IDLE] = 0;
-    if (cJSON_GetObjectItem(jl, LIGHT_LIMITS[L_IDLE].key) &&
-        !read_ints(jl, &LIGHT_LIMITS[L_IDLE], 1, &v[L_IDLE], err, err_len)) {
-        return false;
-    }
-    if (v[L_MIN] > v[L_MAX]) {
-        snprintf(err, err_len, "min_brightness is above max_brightness");
-        return false;
-    }
-    if (cJSON_GetObjectItem(jl, "color")) {
-        int color = read_enum(jl, "color", COLOR_NAMES, ARRAY_SIZE(COLOR_NAMES));
-        if (color < 0) {
-            snprintf(err, err_len, "color: expected red, green, blue or rgb");
-            return false;
-        }
-        l->color = color;
-    }
-    l->min_brightness = v[L_MIN];
-    l->max_brightness = v[L_MAX];
-    l->idle_brightness = v[L_IDLE];
-    l->attack_ms = v[L_ATTACK];
-    l->release_ms = v[L_RELEASE];
-    l->gain_halflife_ms = v[L_HALFLIFE];
-    return true;
-}
-
-/* {"count": n, "playlist": {light}, "radio": {light}}. Settings saved before the per-mode
- * split have the light fields right in "led": they then apply to both modes. */
-static bool parse_led(const cJSON *jl, led_settings_t *l, char *err, size_t err_len)
-{
-    int count;
-    if (!read_ints(jl, LED_LIMITS, ARRAY_SIZE(LED_LIMITS), &count, err, err_len)) {
-        return false;
-    }
-    bool legacy = cJSON_GetObjectItem(jl, "min_brightness") != NULL;
-    for (int m = 0; m < PLAYER_MODE_COUNT; m++) {
-        const cJSON *jm = cJSON_GetObjectItemCaseSensitive(jl, MODE_NAMES[m]);
-        const cJSON *src = cJSON_IsObject(jm) ? jm : legacy ? jl : NULL;
-        char why[64];
-        if (src && !parse_light(src, &l->light[m], why, sizeof(why))) {
-            snprintf(err, err_len, "%s: %s", MODE_NAMES[m], why);
-            return false;
-        }
-    }
-    l->count = count;
-    return true;
-}
-
-static bool parse_sensor(const cJSON *js, sensor_settings_t *s, char *err, size_t err_len)
-{
-    int v[ARRAY_SIZE(SENSOR_LIMITS)];
-    bool enabled;
-    if (!read_bool(js, "enabled", &enabled, err, err_len) ||
-        !read_ints(js, SENSOR_LIMITS, ARRAY_SIZE(SENSOR_LIMITS), v, err, err_len)) {
-        return false;
-    }
-    int t = read_enum(js, "trigger", TRIGGER_NAMES, ARRAY_SIZE(TRIGGER_NAMES));
-    if (t < 0) {
-        snprintf(err, err_len, "trigger: expected \"motion\" or \"presence\"");
-        return false;
-    }
-    s->enabled = enabled;
-    s->trigger = t;
-    s->max_gate = v[S_GATE];
-    s->sensitivity = v[S_SENSITIVITY];
-    s->cooldown_s = v[S_COOLDOWN];
-    return true;
-}
-
-/* {"playlist": {sensor}, "radio": {sensor}}. Settings saved before the per-mode split have
- * the fields right in "sensor": they then apply to both modes. */
-static bool parse_sensors(const cJSON *js, sensor_settings_t *s, char *err, size_t err_len)
-{
-    bool legacy = cJSON_GetObjectItem(js, "enabled") != NULL;
-    for (int m = 0; m < PLAYER_MODE_COUNT; m++) {
-        const cJSON *jm = cJSON_GetObjectItemCaseSensitive(js, MODE_NAMES[m]);
-        const cJSON *src = cJSON_IsObject(jm) ? jm : legacy ? js : NULL;
-        char why[64];
-        if (src && !parse_sensor(src, &s[m], why, sizeof(why))) {
-            snprintf(err, err_len, "%s: %s", MODE_NAMES[m], why);
-            return false;
-        }
-    }
-    return true;
-}
-
-static bool read_string(const cJSON *obj, const char *key, char *out, size_t size,
-                        char *err, size_t err_len)
-{
-    const cJSON *item = cJSON_GetObjectItemCaseSensitive(obj, key);
-    if (!cJSON_IsString(item) || item->valuestring[0] == '\0' || strlen(item->valuestring) >= size) {
-        snprintf(err, err_len, "%s: expected a string of 1..%u bytes", key, (unsigned)size - 1);
-        return false;
-    }
-    strlcpy(out, item->valuestring, size);
-    return true;
-}
-
 static bool parse_radio(const cJSON *jr, radio_settings_t *r, char *err, size_t err_len)
 {
-    int v[ARRAY_SIZE(RADIO_LIMITS)];
-    if (!read_ints(jr, RADIO_LIMITS, ARRAY_SIZE(RADIO_LIMITS), v, err, err_len)) {
+    if (!read_group(jr, &RADIO_GROUP, r, err, err_len)) {
         return false;
     }
     const cJSON *jstations = cJSON_GetObjectItemCaseSensitive(jr, "stations");
@@ -390,8 +427,6 @@ static bool parse_radio(const cJSON *jr, radio_settings_t *r, char *err, size_t 
     }
     r->station_count = n;
     r->current = current->valueint;
-    r->volume = v[R_VOLUME];
-    r->sensor_minutes = v[R_MINUTES];
     return true;
 }
 
@@ -411,7 +446,6 @@ static bool parse(const char *json, all_settings_t *s, char *err, size_t err_len
     const cJSON *jled = cJSON_GetObjectItemCaseSensitive(root, "led");
     const cJSON *jsensor = cJSON_GetObjectItemCaseSensitive(root, "sensor");
     const cJSON *jradio = cJSON_GetObjectItemCaseSensitive(root, "radio");
-    const cJSON *jmode = cJSON_GetObjectItem(root, "mode");
     const cJSON *jcast = cJSON_GetObjectItemCaseSensitive(root, "cast");
     if (!cJSON_IsArray(jtracks) || !cJSON_IsObject(jled)) {
         snprintf(err, err_len, "expected \"tracks\" array and \"led\" object");
@@ -430,32 +464,19 @@ static bool parse(const char *json, all_settings_t *s, char *err, size_t err_len
             continue;
         }
         char why[64];
-        if (!parse_track(jt, &s->tracks[idx].cfg, why, sizeof(why))) {
+        if (!read_group(jt, &TRACK_GROUP, &s->tracks[idx].cfg, why, sizeof(why))) {
             snprintf(err, err_len, "%s: %s", name->valuestring, why);
             goto out;
         }
     }
-    if (!parse_led(jled, &s->led, err, err_len)) {
-        goto out;
-    }
-    if (jsensor && !parse_sensors(jsensor, s->sensor, err, err_len)) {
-        goto out;
-    }
-    if (jradio && !parse_radio(jradio, &s->radio, err, err_len)) {
-        goto out;
-    }
-    if (jcast && !parse_cast(jcast, &s->cast, err, err_len)) {
-        goto out;
-    }
-    if (jmode) {
-        int mode = read_enum(root, "mode", MODE_NAMES, ARRAY_SIZE(MODE_NAMES));
-        if (mode < 0) {
-            snprintf(err, err_len, "mode: expected \"playlist\" or \"radio\"");
-            goto out;
-        }
-        s->mode = mode;
-    }
-    ok = true;
+    ok = read_group(jled, &LED_GROUP, &s->led, err, err_len) &&
+         read_per_mode(jled, "min_brightness", &LIGHT_GROUP, s->led.light, sizeof(s->led.light[0]),
+                       err, err_len) &&
+         (!jsensor || read_per_mode(jsensor, "enabled", &SENSOR_GROUP, s->sensor, sizeof(s->sensor[0]),
+                                    err, err_len)) &&
+         (!jradio || parse_radio(jradio, &s->radio, err, err_len)) &&
+         (!jcast || parse_cast(jcast, &s->cast, err, err_len)) &&
+         read_group(root, &ROOT_GROUP, s, err, err_len);
 
 out:
     cJSON_Delete(root);
@@ -543,7 +564,7 @@ static void scan_tracks(void)
         }
         track_entry_t *t = &cur.tracks[cur.track_count++];
         strlcpy(t->name, e->d_name, sizeof(t->name));
-        t->cfg = TRACK_DEFAULTS;
+        set_defaults(&TRACK_GROUP, &t->cfg);
     }
     closedir(dir);
     qsort(cur.tracks, cur.track_count, sizeof(cur.tracks[0]), compare_tracks);
@@ -556,13 +577,17 @@ void settings_init(void)
     revision = esp_random();
 
     scan_tracks();
-    cur.led = LED_DEFAULTS;
-    cur.sensor[PLAYER_MODE_PLAYLIST] = SENSOR_DEFAULTS;
-    cur.sensor[PLAYER_MODE_RADIO] = SENSOR_DEFAULTS;
-    cur.mode = PLAYER_MODE_PLAYLIST;
-    cur.radio = RADIO_DEFAULTS;
-    cur.cast = (cast_settings_t){ .dlna = true, .airplay = true, .spotify = true };
+    set_defaults(&LED_GROUP, &cur.led);
+    for (int m = 0; m < PLAYER_MODE_COUNT; m++) {
+        set_defaults(&LIGHT_GROUP, &cur.led.light[m]);
+        set_defaults(&SENSOR_GROUP, &cur.sensor[m]);
+    }
+    set_defaults(&ROOT_GROUP, &cur);
+    set_defaults(&RADIO_GROUP, &cur.radio);
     memcpy(cur.radio.stations, STATION_PRESETS, sizeof(STATION_PRESETS));
+    cur.radio.station_count = ARRAY_SIZE(STATION_PRESETS);
+    cur.radio.current = 0;
+    set_defaults(&CAST_GROUP, &cur.cast);
     for (size_t i = 0; i < cur.track_count; i++) {
         ESP_LOGI(TAG, "Track: %s, %u bytes", cur.tracks[i].name,
                  (unsigned)storage_file_size(cur.tracks[i].name));
@@ -628,7 +653,7 @@ esp_err_t settings_add_track(const char *name)
     } else {
         track_entry_t *t = &cur.tracks[cur.track_count++];
         strlcpy(t->name, name, sizeof(t->name));
-        t->cfg = TRACK_DEFAULTS;
+        set_defaults(&TRACK_GROUP, &t->cfg);
         qsort(cur.tracks, cur.track_count, sizeof(cur.tracks[0]), compare_tracks);
     }
     xSemaphoreGive(lock);
@@ -730,15 +755,6 @@ bool settings_is_track_name(const char *name)
     return is_mp3_name(name);
 }
 
-static void add_limits(cJSON *parent, const char *name, const limit_t *limits, size_t n)
-{
-    cJSON *group = cJSON_AddObjectToObject(parent, name);
-    for (size_t i = 0; i < n; i++) {
-        int range[2] = { limits[i].min, limits[i].max };
-        cJSON_AddItemToObject(group, limits[i].key, cJSON_CreateIntArray(range, 2));
-    }
-}
-
 char *settings_to_json(bool for_ui)
 {
     cJSON *root = cJSON_CreateObject();
@@ -752,10 +768,7 @@ char *settings_to_json(bool for_ui)
         const track_entry_t *t = &cur.tracks[i];
         cJSON *jt = cJSON_CreateObject();
         cJSON_AddStringToObject(jt, "name", t->name);
-        cJSON_AddBoolToObject(jt, "enabled", t->cfg.enabled);
-        cJSON_AddNumberToObject(jt, "repeat", t->cfg.repeat);
-        cJSON_AddNumberToObject(jt, "volume", t->cfg.volume);
-        cJSON_AddNumberToObject(jt, "pause_ms", t->cfg.pause_ms);
+        write_group(jt, &TRACK_GROUP, &t->cfg);
         if (for_ui) {
             cJSON_AddNumberToObject(jt, "size", storage_file_size(t->name));
         }
@@ -763,31 +776,11 @@ char *settings_to_json(bool for_ui)
     }
 
     cJSON *jled = cJSON_AddObjectToObject(root, "led");
-    cJSON_AddNumberToObject(jled, "count", cur.led.count);
-    for (int m = 0; m < PLAYER_MODE_COUNT; m++) {
-        const light_settings_t *l = &cur.led.light[m];
-        cJSON *jl = cJSON_AddObjectToObject(jled, MODE_NAMES[m]);
-        cJSON_AddStringToObject(jl, "color", COLOR_NAMES[l->color]);
-        cJSON_AddNumberToObject(jl, "min_brightness", l->min_brightness);
-        cJSON_AddNumberToObject(jl, "max_brightness", l->max_brightness);
-        cJSON_AddNumberToObject(jl, "idle_brightness", l->idle_brightness);
-        cJSON_AddNumberToObject(jl, "attack_ms", l->attack_ms);
-        cJSON_AddNumberToObject(jl, "release_ms", l->release_ms);
-        cJSON_AddNumberToObject(jl, "gain_halflife_ms", l->gain_halflife_ms);
-    }
+    write_group(jled, &LED_GROUP, &cur.led);
+    write_per_mode(jled, &LIGHT_GROUP, cur.led.light, sizeof(cur.led.light[0]));
+    write_per_mode(cJSON_AddObjectToObject(root, "sensor"), &SENSOR_GROUP, cur.sensor, sizeof(cur.sensor[0]));
+    write_group(root, &ROOT_GROUP, &cur);
 
-    cJSON *jsensor = cJSON_AddObjectToObject(root, "sensor");
-    for (int m = 0; m < PLAYER_MODE_COUNT; m++) {
-        const sensor_settings_t *ss = &cur.sensor[m];
-        cJSON *js = cJSON_AddObjectToObject(jsensor, MODE_NAMES[m]);
-        cJSON_AddBoolToObject(js, "enabled", ss->enabled);
-        cJSON_AddStringToObject(js, "trigger", TRIGGER_NAMES[ss->trigger]);
-        cJSON_AddNumberToObject(js, "max_gate", ss->max_gate);
-        cJSON_AddNumberToObject(js, "sensitivity", ss->sensitivity);
-        cJSON_AddNumberToObject(js, "cooldown_s", ss->cooldown_s);
-    }
-
-    cJSON_AddStringToObject(root, "mode", MODE_NAMES[cur.mode]);
     cJSON *jradio = cJSON_AddObjectToObject(root, "radio");
     cJSON *jstations = cJSON_AddArrayToObject(jradio, "stations");
     for (size_t i = 0; i < cur.radio.station_count; i++) {
@@ -797,13 +790,10 @@ char *settings_to_json(bool for_ui)
         cJSON_AddItemToArray(jstations, js);
     }
     cJSON_AddNumberToObject(jradio, "current", cur.radio.current);
-    cJSON_AddNumberToObject(jradio, "volume", cur.radio.volume);
-    cJSON_AddNumberToObject(jradio, "sensor_minutes", cur.radio.sensor_minutes);
+    write_group(jradio, &RADIO_GROUP, &cur.radio);
 
     cJSON *jcast = cJSON_AddObjectToObject(root, "cast");
-    cJSON_AddBoolToObject(jcast, "dlna", cur.cast.dlna);
-    cJSON_AddBoolToObject(jcast, "airplay", cur.cast.airplay);
-    cJSON_AddBoolToObject(jcast, "spotify", cur.cast.spotify);
+    write_group(jcast, &CAST_GROUP, &cur.cast);
     cJSON_AddStringToObject(jcast, "spotify_client_id", cur.cast.spotify_client_id);
     if (for_ui) {
         /* The page only learns whether it is there; it sends a new one to replace it */
@@ -815,11 +805,11 @@ char *settings_to_json(bool for_ui)
 
     if (for_ui) {
         cJSON *jlimits = cJSON_AddObjectToObject(root, "limits");
-        add_limits(jlimits, "track", TRACK_LIMITS, ARRAY_SIZE(TRACK_LIMITS));
-        add_limits(jlimits, "led", LED_LIMITS, ARRAY_SIZE(LED_LIMITS));
-        add_limits(jlimits, "light", LIGHT_LIMITS, ARRAY_SIZE(LIGHT_LIMITS));
-        add_limits(jlimits, "sensor", SENSOR_LIMITS, ARRAY_SIZE(SENSOR_LIMITS));
-        add_limits(jlimits, "radio", RADIO_LIMITS, ARRAY_SIZE(RADIO_LIMITS));
+        add_limits(jlimits, "track", &TRACK_GROUP);
+        add_limits(jlimits, "led", &LED_GROUP);
+        add_limits(jlimits, "light", &LIGHT_GROUP);
+        add_limits(jlimits, "sensor", &SENSOR_GROUP);
+        add_limits(jlimits, "radio", &RADIO_GROUP);
         cJSON_AddNumberToObject(jlimits, "max_stations", RADIO_MAX_STATIONS);
         cJSON_AddNumberToObject(jlimits, "max_station_name_bytes", RADIO_NAME_SIZE - 1);
         cJSON_AddNumberToObject(jlimits, "max_url_bytes", RADIO_URL_SIZE - 1);
