@@ -4,10 +4,10 @@
 #include "freertos/task.h"
 #include "led_strip.h"
 #include "esp_log.h"
+#include "board.h"
 #include "led_music.h"
 #include "settings.h"
 
-#define LED_GPIO        GPIO_NUM_12 /* D7 */
 #define FRAME_MS        10
 #define PEAK_FLOOR      500.0f      /* don't amplify silence / noise */
 #define BAND_FLOOR      100.0f      /* same for the band averages in RGB mode */
@@ -99,7 +99,7 @@ static void strip_create(uint16_t count)
         strip = NULL;
     }
     led_strip_config_t strip_cfg = {
-        .strip_gpio_num = LED_GPIO,
+        .strip_gpio_num = BOARD_LED_STRIP,
         .max_leds = count,
         .led_model = LED_MODEL_WS2812,
         .color_component_format = LED_STRIP_COLOR_COMPONENT_FMT_GRB,
@@ -111,7 +111,7 @@ static void strip_create(uint16_t count)
     };
     ESP_ERROR_CHECK(led_strip_new_spi_device(&strip_cfg, &spi_cfg, &strip));
     strip_leds = count;
-    ESP_LOGI(TAG, "%d WS2812 on GPIO%d", count, LED_GPIO);
+    ESP_LOGI(TAG, "%d WS2812 on GPIO%d", count, BOARD_LED_STRIP);
 }
 
 static void led_task(void *arg)

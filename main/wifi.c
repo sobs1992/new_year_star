@@ -12,11 +12,11 @@
 #include "mdns.h"
 #include "nvs.h"
 #include "cJSON.h"
+#include "app_config.h"
 #include "wifi.h"
 
 #define AP_MAX_CONN     4
 #define AP_APPLY_MS     1000 /* let the HTTP answer leave before clients get dropped */
-#define NVS_NAMESPACE   "star"
 #define NVS_AP_PASSWORD "ap_password"
 #define RECONNECT_MS    5000
 #define SCAN_MAX        24

@@ -25,10 +25,10 @@
 #include "TrackPlayer.h"
 
 extern "C" {
+#include "app_config.h"
 #include "settings.h"
 }
 
-#define DEVICE_NAME    "Новогодняя звезда"
 #define FRAME_BYTES    4                /* 16-bit stereo */
 #define RING_SIZE      (384 * 1024)     /* ~2.2 s at 44.1 kHz */
 #define PAUSE_HOLD_MS  (2 * 60 * 1000)  /* then the star goes back to its own playlist / radio */

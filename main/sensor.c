@@ -7,13 +7,12 @@
 #include "driver/uart.h"
 #include "esp_log.h"
 #include "cJSON.h"
+#include "board.h"
 #include "sensor.h"
 #include "settings.h"
 
 /* mmWave for XIAO pins: its TX sits on D2, its RX on D3 */
 #define SENSOR_UART         UART_NUM_1
-#define SENSOR_RX_GPIO      GPIO_NUM_25 /* D2 <- sensor TX */
-#define SENSOR_TX_GPIO      GPIO_NUM_7  /* D3 -> sensor RX */
 #define SENSOR_BAUD         256000
 
 #define OFFLINE_MS          2000  /* radar reports ~10 frames/s */
@@ -308,12 +307,12 @@ void sensor_start(void)
     };
     ESP_ERROR_CHECK(uart_driver_install(SENSOR_UART, 1024, 0, 0, NULL, 0));
     ESP_ERROR_CHECK(uart_param_config(SENSOR_UART, &cfg));
-    ESP_ERROR_CHECK(uart_set_pin(SENSOR_UART, SENSOR_TX_GPIO, SENSOR_RX_GPIO,
+    ESP_ERROR_CHECK(uart_set_pin(SENSOR_UART, BOARD_RADAR_TX, BOARD_RADAR_RX,
                                  UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
 
     xTaskCreate(sensor_task, "sensor", 4096, NULL, 5, NULL);
     ESP_LOGI(TAG, "UART%d %d baud, RX GPIO%d (D2), TX GPIO%d (D3)",
-             SENSOR_UART, SENSOR_BAUD, SENSOR_RX_GPIO, SENSOR_TX_GPIO);
+             SENSOR_UART, SENSOR_BAUD, BOARD_RADAR_RX, BOARD_RADAR_TX);
 }
 
 void sensor_get_state(sensor_state_t *out)

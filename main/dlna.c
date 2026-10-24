@@ -15,10 +15,10 @@
 #include "esp_random.h"
 #include "esp_timer.h"
 #include "lwip/sockets.h"
+#include "app_config.h"
 #include "dlna.h"
 #include "settings.h"
 
-#define FRIENDLY_NAME   "Новогодняя звезда"
 #define DESC_PATH       "/dlna/description.xml"
 #define SSDP_ADDR       "239.255.255.250"
 #define SSDP_PORT       1900
@@ -268,7 +268,7 @@ static void build_description(void)
         "<specVersion><major>1</major><minor>0</minor></specVersion>"
         "<device>"
         "<deviceType>" DEVICE_TYPE "</deviceType>"
-        "<friendlyName>" FRIENDLY_NAME "</friendlyName>"
+        "<friendlyName>" DEVICE_NAME "</friendlyName>"
         "<manufacturer>DIY</manufacturer>"
         "<modelName>New Year Star</modelName>"
         "<modelNumber>1</modelNumber>"
@@ -1124,7 +1124,7 @@ void dlna_start(httpd_handle_t httpd)
     /* Stacks in PSRAM: internal RAM is short, and these never touch the flash */
     xTaskCreateWithCaps(event_task, "dlna_events", 6144, NULL, 3, &event_task_handle, MALLOC_CAP_SPIRAM);
     xTaskCreateWithCaps(ssdp_task, "ssdp", 4096, NULL, 3, NULL, MALLOC_CAP_SPIRAM);
-    ESP_LOGI(TAG, "Renderer \"%s\" %s", FRIENDLY_NAME, uuid);
+    ESP_LOGI(TAG, "Renderer \"%s\" %s", DEVICE_NAME, uuid);
 }
 
 bool dlna_get_job(dlna_job_t *out)

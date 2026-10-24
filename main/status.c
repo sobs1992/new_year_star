@@ -6,6 +6,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "cJSON.h"
+#include "board.h"
 #include "player.h"
 #include "radio.h"
 #include "sensor.h"
@@ -14,7 +15,6 @@
 #include "storage.h"
 #include "wifi.h"
 
-#define LED_GPIO        GPIO_NUM_27 /* yellow user LED, on when low */
 #define TICK_MS         50
 #define BLINK_ON_MS     200
 #define BLINK_OFF_MS    300
@@ -28,7 +28,7 @@ static atomic_int override = -1;
 
 static void led(bool on)
 {
-    gpio_set_level(LED_GPIO, !on);
+    gpio_set_level(BOARD_STATUS_LED, !on);
 }
 
 static uint32_t check_errors(void)
@@ -116,7 +116,7 @@ static void status_task(void *arg)
 void status_start(void)
 {
     gpio_config_t out = {
-        .pin_bit_mask = 1ULL << LED_GPIO,
+        .pin_bit_mask = 1ULL << BOARD_STATUS_LED,
         .mode = GPIO_MODE_OUTPUT,
     };
     ESP_ERROR_CHECK(gpio_config(&out));

@@ -10,10 +10,10 @@
 #include "cJSON.h"
 #include "esp_log.h"
 #include "esp_random.h"
+#include "app_config.h"
 #include "settings.h"
 #include "storage.h"
 
-#define NVS_NAMESPACE   "star"
 #define NVS_KEY         "settings"
 #define ARRAY_SIZE(a)   (sizeof(a) / sizeof((a)[0]))
 

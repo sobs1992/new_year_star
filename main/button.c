@@ -5,16 +5,16 @@
 #include "esp_system.h"
 #include "esp_wifi.h"
 #include "nvs.h"
+#include "app_config.h"
+#include "board.h"
 #include "button.h"
 #include "led_music.h"
 #include "status.h"
 
-#define BUTTON_GPIO     GPIO_NUM_28 /* BOOT, to GND when pressed */
 #define POLL_MS         50
 #define FEEDBACK_MS     1000        /* start blinking after this, so a short press shows nothing */
 #define RESET_MS        5000
 #define BLINK_MS        250
-#define NVS_NAMESPACE   "star"      /* settings.c and wifi.c keep their data here */
 #define SIGNAL_COLOR    0x606060    /* dim white: the whole strip at full white draws over 1 A */
 
 static const char *TAG = "button";
@@ -42,7 +42,7 @@ static void button_task(void *arg)
     uint32_t held_ms = 0;
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(POLL_MS));
-        if (gpio_get_level(BUTTON_GPIO) != 0) {
+        if (gpio_get_level(BOARD_BOOT_BUTTON) != 0) {
             if (held_ms >= FEEDBACK_MS) {
                 ESP_LOGI(TAG, "Released, no reset");
                 led_music_override(LED_MUSIC_NO_OVERRIDE);
@@ -70,7 +70,7 @@ static void button_task(void *arg)
 void button_start(void)
 {
     gpio_config_t in = {
-        .pin_bit_mask = 1ULL << BUTTON_GPIO,
+        .pin_bit_mask = 1ULL << BOARD_BOOT_BUTTON,
         .mode = GPIO_MODE_INPUT,
         .pull_up_en = GPIO_PULLUP_ENABLE,
     };

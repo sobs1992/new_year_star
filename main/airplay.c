@@ -27,9 +27,9 @@
 #include "psa/crypto.h"
 #include "cJSON.h"
 #include "airplay.h"
+#include "app_config.h"
 #include "settings.h"
 
-#define SERVICE_NAME    "Новогодняя звезда"
 #define RTSP_PORT       5000
 #define FRAMES          352            /* per packet */
 #define PACKET_BYTES    (FRAMES * 4)   /* stereo 16 bit */
@@ -719,7 +719,7 @@ static void advertise(bool on)
     }
     if (on) {
         char name[64];
-        snprintf(name, sizeof(name), "%02X%02X%02X%02X%02X%02X@" SERVICE_NAME,
+        snprintf(name, sizeof(name), "%02X%02X%02X%02X%02X%02X@" DEVICE_NAME,
                  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
         mdns_txt_item_t txt[] = {
             { "txtvers", "1" }, { "ch", "2" }, { "cn", "0,1" }, { "et", "0,1" }, { "ek", "1" },
@@ -728,7 +728,7 @@ static void advertise(bool on)
             { "am", "NewYearStar" },
         };
         if (mdns_service_add(name, "_raop", "_tcp", RTSP_PORT, txt, sizeof(txt) / sizeof(txt[0])) == ESP_OK) {
-            ESP_LOGI(TAG, "Announced as \"%s\"", SERVICE_NAME);
+            ESP_LOGI(TAG, "Announced as \"%s\"", DEVICE_NAME);
         }
     } else {
         mdns_service_remove("_raop", "_tcp");

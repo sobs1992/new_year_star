@@ -15,6 +15,7 @@
 #include "esp_audio_simple_dec_default.h"
 #include "cJSON.h"
 #include "airplay.h"
+#include "board.h"
 #include "dlna.h"
 #include "led_music.h"
 #include "player.h"
@@ -23,11 +24,6 @@
 #include "settings.h"
 #include "spotify.h"
 #include "storage.h"
-
-/* MAX98357 wiring (XIAO ESP32-C5) */
-#define I2S_LRC_GPIO    GPIO_NUM_10 /* D10 */
-#define I2S_BCLK_GPIO   GPIO_NUM_9  /* D9 */
-#define I2S_DIN_GPIO    GPIO_NUM_8  /* D8 */
 
 #define READ_CHUNK      4096 /* compressed bytes fed to the decoder at once */
 #define PCM_BUF_SIZE    4608 /* one MP3 frame: 1152 samples * 2 ch * 16 bit */
@@ -106,9 +102,9 @@ static void i2s_start(uint32_t sample_rate)
         .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
         .gpio_cfg = {
             .mclk = I2S_GPIO_UNUSED,
-            .bclk = I2S_BCLK_GPIO,
-            .ws = I2S_LRC_GPIO,
-            .dout = I2S_DIN_GPIO,
+            .bclk = BOARD_I2S_BCLK,
+            .ws = BOARD_I2S_LRC,
+            .dout = BOARD_I2S_DIN,
             .din = I2S_GPIO_UNUSED,
         },
     };
