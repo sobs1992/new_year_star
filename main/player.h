@@ -14,7 +14,7 @@ typedef enum {
 } player_status_t;
 
 /* Start the task that plays the enabled tracks or the radio: continuously, or per sensor
- * trigger; and whatever phones cast. Needs radio_start() done; the receivers can start later. */
+ * trigger; and whatever phones cast. Needs stream_start() done; the receivers can start later. */
 void player_start(void);
 
 /* Start button: play now (with the sensor: one cycle without waiting for it) */

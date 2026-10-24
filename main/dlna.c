@@ -36,7 +36,7 @@
 #define RCS_TYPE        "urn:schemas-upnp-org:service:RenderingControl:1"
 #define CMS_TYPE        "urn:schemas-upnp-org:service:ConnectionManager:1"
 
-/* What the star can decode, as DLNA protocolInfo */
+/* What the star can decode, as DLNA protocolInfo: the formats of stream.c */
 #define SINK_PROTOCOLS \
     "http-get:*:audio/mpeg:*,http-get:*:audio/mp3:*,http-get:*:audio/aac:*," \
     "http-get:*:audio/x-aac:*,http-get:*:audio/mp4:*,http-get:*:audio/x-m4a:*," \

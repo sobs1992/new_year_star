@@ -11,7 +11,7 @@
 #include "spotify.h"
 #include "dns_server.h"
 #include "player.h"
-#include "radio.h"
+#include "stream.h"
 #include "sensor.h"
 #include "settings.h"
 #include "status.h"
@@ -149,7 +149,7 @@ static esp_err_t status_get(httpd_req_t *req)
     sensor_status_json(cJSON_AddObjectToObject(root, "sensor"));
     wifi_status_json(cJSON_AddObjectToObject(root, "wifi"));
     status_errors_json(cJSON_AddArrayToObject(root, "errors"));
-    radio_status_json(cJSON_AddObjectToObject(root, "radio"));
+    stream_status_json(cJSON_AddObjectToObject(root, "radio")); /* also while DLNA plays */
     airplay_status_json(cJSON_AddObjectToObject(root, "airplay"));
     spotify_status_json(cJSON_AddObjectToObject(root, "spotify"));
     sysinfo_heap_json(cJSON_AddObjectToObject(root, "heap"));

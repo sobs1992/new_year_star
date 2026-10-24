@@ -30,7 +30,7 @@ captive portal DNS server. `app_main()` in `new_year_star.c` starts the modules 
 | `settings` | All user settings: one JSON document in NVS, validated, versioned |
 | `tracks` | Uploading and deleting track files (file + entry in the settings) |
 | `player` | Decides what plays and plays it: decoders, volume, I2S output |
-| `radio` | HTTP(S) download of a stream or file into a PSRAM ring (radio and DLNA) |
+| `stream` | HTTP(S) download of a stream or file into a PSRAM ring (radio and DLNA); the formats |
 | `led_music` | The LED strip: light music from the audio levels the player feeds it |
 | `sensor` | The radar on UART: target, distance, pushing gate / threshold settings |
 | `wifi` | Access point, home network, mDNS (`star.local`), scanning |
@@ -61,7 +61,7 @@ settings, the stop button and casts take effect within a frame.
 
 ```
 MP3 file in LittleFS ──────────────┐
-radio / DLNA URL → radio.c ring ───┴─ decode() ─┐
+radio / DLNA URL → stream.c ring ──┴─ decode() ─┐
 AirPlay (RTP, jitter buffer) ───────────────────┼─ play_pcm(): volume, levels → led_music
 Spotify (cspot decoder, ring) ──────────────────┘        └─ I2S → MAX98357
 ```
@@ -101,7 +101,7 @@ are free (`heap.internal_free` in `/api/status`, `/system` has the details). So:
 
 | Task | Prio | Stack | Stack in | Job |
 |---|---|---|---|---|
-| `radio` | 6 | 8 KB | PSRAM | HTTP(S) stream into the ring |
+| `stream` | 6 | 8 KB | PSRAM | HTTP(S) stream into the ring |
 | `airplay_udp` | 6 | 6 KB | PSRAM | RTP audio, resend requests, timing |
 | `player` | 5 | 8 KB | internal | decoding, I2S output; reads LittleFS |
 | `sensor` | 5 | 4 KB | internal | radar UART |
@@ -144,6 +144,10 @@ tests then fail on the documents they compare: add the field there too.
 44.1 kHz and `volume()`) or its own `play()`; a `SOURCE_*` value and an entry in `CASTS[]` at its
 priority; its start in `app_main()`; an on / off flag in `cast_settings_t` and `CAST_FIELDS`;
 `*_status_json()`.
+
+**An audio format** (from a URL: radio, DLNA). A `stream_codec_t` value with its line in `CODECS`
+and its MIME types / extension in `FORMATS` (`stream.c`); its decoder on in `sdkconfig.defaults`;
+its MIME types in `SINK_PROTOCOLS` (`dlna.c`), so phones offer it.
 
 **A light color mode.** A `light_color_t` value (`settings.h`), its name in `COLOR_NAMES`
 (`settings.c`), a case in the color switch of `led_task()` (`led_music.c`), a button and a hint

@@ -5,7 +5,7 @@
 #include "dlna.h"
 #include "led_music.h"
 #include "player.h"
-#include "radio.h"
+#include "stream.h"
 #include "sensor.h"
 #include "settings.h"
 #include "spotify.h"
@@ -30,7 +30,7 @@ void app_main(void)
     sensor_start();
     wifi_start(); /* also mDNS, where AirPlay and Spotify announce themselves */
     button_init(); /* polled by the status task */
-    radio_start();
+    stream_start();
     player_start();
     sysinfo_start();
 

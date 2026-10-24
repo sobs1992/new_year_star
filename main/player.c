@@ -19,7 +19,7 @@
 #include "dlna.h"
 #include "led_music.h"
 #include "player.h"
-#include "radio.h"
+#include "stream.h"
 #include "sensor.h"
 #include "settings.h"
 #include "spotify.h"
@@ -183,7 +183,7 @@ static void play_pcm(int16_t *pcm, size_t size, int volume, int channels)
     ESP_ERROR_CHECK(i2s_channel_write(tx_chan, pcm, size, &written, portMAX_DELAY));
 }
 
-/* Compressed audio coming from a file or from the radio buffer */
+/* Compressed audio coming from a file or from the stream buffer */
 typedef struct audio_source {
     esp_audio_simple_dec_type_t type;
     /* Up to len bytes; 0 means end of stream */
@@ -289,17 +289,6 @@ done:
     free(out);
     led_music_set_levels(0, 0, 0, 0);
     return decoded;
-}
-
-static esp_audio_simple_dec_type_t decoder_type(radio_codec_t codec)
-{
-    switch (codec) {
-    case RADIO_CODEC_AAC: return ESP_AUDIO_SIMPLE_DEC_TYPE_AAC;
-    case RADIO_CODEC_FLAC: return ESP_AUDIO_SIMPLE_DEC_TYPE_FLAC;
-    case RADIO_CODEC_WAV: return ESP_AUDIO_SIMPLE_DEC_TYPE_WAV;
-    case RADIO_CODEC_M4A: return ESP_AUDIO_SIMPLE_DEC_TYPE_M4A;
-    default: return ESP_AUDIO_SIMPLE_DEC_TYPE_MP3;
-    }
 }
 
 /* ---- Who gets the speaker ---- */
@@ -459,7 +448,7 @@ static bool play_cycle(void)
     return played;
 }
 
-/* ---- Radio: stream from the radio buffer ---- */
+/* ---- Radio: the station from the stream buffer ---- */
 
 typedef struct {
     audio_source_t base;
@@ -471,7 +460,7 @@ typedef struct {
 
 static bool radio_keep_playing(radio_source_t *rs)
 {
-    if (wanted_source() != SOURCE_RADIO || radio_generation() != rs->generation ||
+    if (wanted_source() != SOURCE_RADIO || stream_generation() != rs->generation ||
         deadline_passed(rs->deadline)) {
         return false;
     }
@@ -487,11 +476,11 @@ static size_t radio_source_read(audio_source_t *src, uint8_t *buf, size_t len)
         if (!radio_keep_playing(rs)) {
             return 0;
         }
-        radio_status_t st;
-        radio_get_status(&st);
+        stream_status_t st;
+        stream_get_status(&st);
         if (st.buffered >= (rs->buffering ? RADIO_PREBUFFER : 1)) {
             rs->buffering = false;
-            return radio_read(buf, len);
+            return stream_read(buf, len);
         }
         if (!rs->buffering) {
             ESP_LOGW(TAG, "Radio buffer ran dry, refilling");
@@ -514,7 +503,7 @@ static void play_radio(TickType_t deadline)
     while (wanted_source() == SOURCE_RADIO && !deadline_passed(deadline)) {
         radio_station_t station;
         if (!settings_get_current_station(&station)) {
-            radio_stop();
+            stream_stop();
             set_status(PLAYER_IDLE, NULL);
             pause_while(IDLE_POLL_MS, SOURCE_RADIO);
             continue;
@@ -527,15 +516,15 @@ static void play_radio(TickType_t deadline)
             .buffering = true,
         };
         strlcpy(rs.url, station.url, sizeof(rs.url));
-        rs.generation = radio_play(rs.url, NULL, true, 0);
+        rs.generation = stream_play(rs.url, NULL, true, 0);
         set_status(PLAYER_RADIO, station.name);
         ESP_LOGI(TAG, "Radio: %s", station.name);
 
         /* The codec is known once the stream is connected */
-        radio_status_t st;
+        stream_status_t st;
         for (;;) {
-            radio_get_status(&st);
-            if (!radio_keep_playing(&rs) || (st.generation == rs.generation && st.state == RADIO_STREAMING)) {
+            stream_get_status(&st);
+            if (!radio_keep_playing(&rs) || (st.generation == rs.generation && st.state == STREAM_STREAMING)) {
                 break;
             }
             vTaskDelay(pdMS_TO_TICKS(TRIGGER_POLL_MS));
@@ -543,7 +532,7 @@ static void play_radio(TickType_t deadline)
         if (!radio_keep_playing(&rs)) {
             continue;
         }
-        rs.base.type = decoder_type(st.codec);
+        rs.base.type = stream_decoder(st.codec);
         if (!decode(&rs.base) && radio_keep_playing(&rs)) {
             ESP_LOGW(TAG, "%s: stream could not be decoded", station.name);
         }
@@ -551,7 +540,7 @@ static void play_radio(TickType_t deadline)
             pause_while(RADIO_RETRY_MS, SOURCE_RADIO); /* stream ended or broke: reconnect */
         }
     }
-    radio_stop();
+    stream_stop();
 }
 
 /* ---- Casting ---- */
@@ -565,7 +554,7 @@ static int cast_gain(uint8_t volume)
 typedef struct {
     audio_source_t base;
     dlna_job_t job;
-    radio_codec_t codec;
+    stream_codec_t codec;
     uint32_t bytes_read;    /* to estimate the bitrate when the length is unknown */
     int64_t last_info_us;
 } dlna_source_t;
@@ -592,14 +581,14 @@ static size_t dlna_source_read(audio_source_t *src, uint8_t *buf, size_t len)
         if (!dlna_current(ds, &paused)) {
             return 0;
         }
-        radio_status_t st;
-        radio_get_status(&st);
+        stream_status_t st;
+        stream_get_status(&st);
         if (!paused && st.buffered > 0) {
-            size_t n = radio_read(buf, len);
+            size_t n = stream_read(buf, len);
             ds->bytes_read += n;
             return n;
         }
-        if (st.buffered == 0 && (st.state == RADIO_ENDED || st.state == RADIO_ERROR)) {
+        if (st.buffered == 0 && (st.state == STREAM_ENDED || st.state == STREAM_ERROR)) {
             return 0;
         }
         led_music_set_levels(0, 0, 0, 0); /* paused or waiting for data: let the light fade */
@@ -621,10 +610,9 @@ static int dlna_source_volume(audio_source_t *src)
         int64_t now = esp_timer_get_time();
         if (now - ds->last_info_us > 1000000 && played_ms > 1000) {
             ds->last_info_us = now;
-            radio_status_t st;
-            radio_get_status(&st);
-            /* Raw MP3 / ADTS AAC frames resync anywhere; FLAC, WAV, M4A need their header */
-            bool format_ok = ds->codec == RADIO_CODEC_MP3 || ds->codec == RADIO_CODEC_AAC;
+            stream_status_t st;
+            stream_get_status(&st);
+            bool format_ok = stream_resyncs(ds->codec);
             uint32_t bps = (uint64_t)ds->bytes_read * 8000 / played_ms;
             dlna_set_stream_info(ds->job.generation, st.content_length, bps, st.seekable && format_ok);
         }
@@ -641,30 +629,30 @@ static void play_dlna(void)
     ds.base = (audio_source_t){ .read = dlna_source_read, .volume = dlna_source_volume };
     ds.bytes_read = 0;
     ds.last_info_us = 0;
-    uint32_t gen = radio_play(ds.job.url, ds.job.mime, false, ds.job.byte_offset);
+    uint32_t gen = stream_play(ds.job.url, ds.job.mime, false, ds.job.byte_offset);
     set_status(PLAYER_CAST, ds.job.title[0] ? ds.job.title : "DLNA");
     ESP_LOGI(TAG, "DLNA: %s", ds.job.title[0] ? ds.job.title : ds.job.url);
 
     /* The format is known once connected */
-    radio_status_t st;
+    stream_status_t st;
     for (;;) {
         if (!dlna_current(&ds, NULL)) {
-            radio_stop();
+            stream_stop();
             return;
         }
-        radio_get_status(&st);
-        if (st.generation == gen && st.state != RADIO_CONNECTING && st.state != RADIO_STOPPED) {
+        stream_get_status(&st);
+        if (st.generation == gen && st.state != STREAM_CONNECTING && st.state != STREAM_STOPPED) {
             break;
         }
         vTaskDelay(pdMS_TO_TICKS(20)); /* a file on the local network connects in milliseconds */
     }
-    bool failed = st.state == RADIO_ERROR && st.buffered == 0;
+    bool failed = st.state == STREAM_ERROR && st.buffered == 0;
     if (!failed) {
         ds.codec = st.codec;
-        ds.base.type = decoder_type(st.codec);
+        ds.base.type = stream_decoder(st.codec);
         failed = !decode(&ds.base);
     }
-    radio_stop();
+    stream_stop();
     dlna_finished(ds.job.generation, failed); /* ignored if the phone moved on meanwhile */
 }
 

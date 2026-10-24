@@ -3,7 +3,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include "esp_http_server.h"
-#include "radio.h"
+#include "stream.h"
 
 /* DLNA / UPnP media renderer: phones find the star over SSDP (home network and the star's
  * own network) and send it the URL of a file to play. */

@@ -1,5 +1,5 @@
 idf_component_register(SRCS "new_year_star.c" "airplay.c" "button.c" "dlna.c" "player.c" "led_music.c"
-                            "radio.c" "sensor.c" "spotify.cpp" "sysinfo.c"
+                            "stream.c" "sensor.c" "spotify.cpp" "sysinfo.c"
                             "settings.c" "status.c" "storage.c" "tracks.c" "web.c" "wifi.c"
                     INCLUDE_DIRS "."
                     REQUIRES esp_driver_gpio esp_driver_i2s esp_driver_uart esp_wifi esp_netif esp_event

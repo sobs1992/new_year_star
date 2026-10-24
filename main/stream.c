@@ -12,8 +12,7 @@
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "cJSON.h"
-#include "radio.h"
-#include "settings.h"
+#include "stream.h"
 #include "wifi.h"
 
 #define RING_SIZE       (512 * 1024) /* ~30 s of 128 kbit/s, in PSRAM */
@@ -26,7 +25,41 @@
 /* Some servers (SomaFM) answer clients without a User-Agent with an announcement instead */
 #define USER_AGENT      "NewYearStar/1.0 (ESP32)"
 
-static const char *TAG = "radio";
+static const char *TAG = "stream";
+
+#define ARRAY_SIZE(a)   (sizeof(a) / sizeof((a)[0]))
+
+/* Everything about the formats the star plays from a URL. A new one: a stream_codec_t value,
+ * a line in CODECS and lines in FORMATS here, its decoder in sdkconfig.defaults, its MIME types
+ * in SINK_PROTOCOLS (dlna.c). */
+static const struct {
+    const char *name;
+    esp_audio_simple_dec_type_t decoder;
+    bool resyncs; /* the decoder finds frames anywhere, so playing can start mid-file */
+} CODECS[] = {
+    [STREAM_CODEC_MP3] = { "MP3", ESP_AUDIO_SIMPLE_DEC_TYPE_MP3, true },
+    [STREAM_CODEC_AAC] = { "AAC", ESP_AUDIO_SIMPLE_DEC_TYPE_AAC, true },   /* ADTS frames */
+    [STREAM_CODEC_FLAC] = { "FLAC", ESP_AUDIO_SIMPLE_DEC_TYPE_FLAC, false },
+    [STREAM_CODEC_WAV] = { "WAV", ESP_AUDIO_SIMPLE_DEC_TYPE_WAV, false },
+    [STREAM_CODEC_M4A] = { "M4A", ESP_AUDIO_SIMPLE_DEC_TYPE_M4A, false },
+};
+_Static_assert(ARRAY_SIZE(CODECS) == STREAM_CODEC_COUNT, "a line for every codec");
+
+/* How a format is recognized: a part of the MIME type, else the extension in the URL path */
+static const struct {
+    const char *mime_part;
+    const char *ext;
+    stream_codec_t codec;
+} FORMATS[] = {
+    { "flac", ".flac", STREAM_CODEC_FLAC },
+    { "wav", ".wav", STREAM_CODEC_WAV },
+    { "audio/mp4", ".m4a", STREAM_CODEC_M4A },
+    { "m4a", ".m4a", STREAM_CODEC_M4A },
+    { "aac", ".aac", STREAM_CODEC_AAC },
+    { "mp4a", ".aacp", STREAM_CODEC_AAC },
+    { "mpeg", ".mp3", STREAM_CODEC_MP3 },
+    { "mp3", ".mp3", STREAM_CODEC_MP3 },
+};
 
 static uint8_t *ring;
 static size_t ring_head;
@@ -38,6 +71,10 @@ static char wanted_url[STREAM_URL_SIZE];
 static char wanted_mime[48];
 static bool wanted_live;
 static uint32_t wanted_offset;
+static uint32_t wanted_gen;
+static stream_status_t status;
+static TaskHandle_t task;
+static uint8_t rx_buf[RX_CHUNK];
 
 /* Response headers of the current request, collected by the client's event handler
  * (esp_http_client_get_header() only reads request headers) */
@@ -63,21 +100,15 @@ static esp_err_t http_event(esp_http_client_event_t *evt)
     }
     return ESP_OK;
 }
-static uint32_t wanted_gen;
-static radio_status_t status;
-static TaskHandle_t task;
-static uint8_t rx_buf[RX_CHUNK];
 
-static const char *codec_name(radio_codec_t codec)
+esp_audio_simple_dec_type_t stream_decoder(stream_codec_t codec)
 {
-    switch (codec) {
-    case RADIO_CODEC_MP3: return "MP3";
-    case RADIO_CODEC_AAC: return "AAC";
-    case RADIO_CODEC_FLAC: return "FLAC";
-    case RADIO_CODEC_WAV: return "WAV";
-    case RADIO_CODEC_M4A: return "M4A";
-    }
-    return "?";
+    return CODECS[codec].decoder;
+}
+
+bool stream_resyncs(stream_codec_t codec)
+{
+    return CODECS[codec].resyncs;
 }
 
 static size_t ring_write(const uint8_t *data, size_t len)
@@ -93,7 +124,7 @@ static size_t ring_write(const uint8_t *data, size_t len)
     return n;
 }
 
-size_t radio_read(uint8_t *buf, size_t len)
+size_t stream_read(uint8_t *buf, size_t len)
 {
     xSemaphoreTake(ring_lock, portMAX_DELAY);
     size_t n = len < ring_count ? len : ring_count;
@@ -114,7 +145,7 @@ static void ring_reset(void)
     xSemaphoreGive(ring_lock);
 }
 
-static void set_status(uint32_t gen, radio_state_t state, radio_codec_t codec, const char *error)
+static void set_status(uint32_t gen, stream_state_t state, stream_codec_t codec, const char *error)
 {
     xSemaphoreTake(req_lock, portMAX_DELAY);
     if (gen != status.generation) {
@@ -168,23 +199,9 @@ static void lower(char *s)
 }
 
 /* Format from the MIME type, else from the file extension in the URL */
-static bool detect_codec(const char *mime, const char *url, radio_codec_t *out)
+static bool detect_codec(const char *mime, const char *url, stream_codec_t *out)
 {
-    static const struct {
-        const char *mime_part;
-        const char *ext;
-        radio_codec_t codec;
-    } FORMATS[] = {
-        { "flac", ".flac", RADIO_CODEC_FLAC },
-        { "wav", ".wav", RADIO_CODEC_WAV },
-        { "audio/mp4", ".m4a", RADIO_CODEC_M4A },
-        { "m4a", ".m4a", RADIO_CODEC_M4A },
-        { "aac", ".aac", RADIO_CODEC_AAC },
-        { "mp4a", ".aacp", RADIO_CODEC_AAC },
-        { "mpeg", ".mp3", RADIO_CODEC_MP3 },
-        { "mp3", ".mp3", RADIO_CODEC_MP3 },
-    };
-    for (size_t i = 0; mime[0] && i < sizeof(FORMATS) / sizeof(FORMATS[0]); i++) {
+    for (size_t i = 0; mime[0] && i < ARRAY_SIZE(FORMATS); i++) {
         if (strstr(mime, FORMATS[i].mime_part)) {
             *out = FORMATS[i].codec;
             return true;
@@ -193,7 +210,7 @@ static bool detect_codec(const char *mime, const char *url, radio_codec_t *out)
     char path[STREAM_URL_SIZE];
     strlcpy(path, url, sizeof(path));
     path[strcspn(path, "?#")] = '\0';
-    for (size_t i = 0; i < sizeof(FORMATS) / sizeof(FORMATS[0]); i++) {
+    for (size_t i = 0; i < ARRAY_SIZE(FORMATS); i++) {
         if (ends_with(path, FORMATS[i].ext)) {
             *out = FORMATS[i].codec;
             return true;
@@ -205,8 +222,8 @@ static bool detect_codec(const char *mime, const char *url, radio_codec_t *out)
 /* Connect, follow redirects and playlists, then pump the stream into the ring until the
  * request changes (returns NULL), the file ends (returns NULL, *ended) or something fails
  * (returns the reason) */
-static const char *stream(const char *start_url, const char *mime_hint, uint32_t offset, uint32_t gen,
-                          bool *ended)
+static const char *receive(const char *start_url, const char *mime_hint, uint32_t offset, uint32_t gen,
+                           bool *ended)
 {
     static char url[STREAM_URL_SIZE];
     static char error[96];
@@ -283,7 +300,7 @@ static const char *stream(const char *start_url, const char *mime_hint, uint32_t
             continue;
         }
 
-        radio_codec_t codec = RADIO_CODEC_MP3; /* unknown format: most streams are MP3 */
+        stream_codec_t codec = STREAM_CODEC_MP3; /* unknown format: most streams are MP3 */
         if (!detect_codec(content_type, url, &codec) && !detect_codec(mime_hint, url, &codec) &&
             content_type[0] && !strstr(content_type, "audio")) {
             esp_http_client_cleanup(client);
@@ -297,9 +314,9 @@ static const char *stream(const char *start_url, const char *mime_hint, uint32_t
         int64_t length = esp_http_client_get_content_length(client);
         uint32_t total = code == 206 ? resp.range_total : length > 0 ? (uint32_t)length : 0;
 
-        ESP_LOGI(TAG, "Streaming %s (%s, %" PRIu32 " bytes%s%s)", url, codec_name(codec), total,
+        ESP_LOGI(TAG, "Streaming %s (%s, %" PRIu32 " bytes%s%s)", url, CODECS[codec].name, total,
                  resp.accept_ranges ? ", seekable" : "", code == 206 ? ", from offset" : "");
-        set_status(gen, RADIO_STREAMING, codec, NULL);
+        set_status(gen, STREAM_STREAMING, codec, NULL);
         xSemaphoreTake(req_lock, portMAX_DELAY);
         status.content_length = total;
         status.seekable = resp.accept_ranges && total > 0;
@@ -329,7 +346,7 @@ static const char *stream(const char *start_url, const char *mime_hint, uint32_t
     return "Слишком много вложенных плейлистов";
 }
 
-/* A notification can be left over from an earlier radio_play(): only a new generation counts,
+/* A notification can be left over from an earlier stream_play(): only a new generation counts,
  * otherwise a finished file would be downloaded again right away */
 static void wait_for_new_request(uint32_t gen)
 {
@@ -338,7 +355,7 @@ static void wait_for_new_request(uint32_t gen)
     }
 }
 
-static void radio_task(void *arg)
+static void stream_task(void *arg)
 {
     for (;;) {
         static char url[STREAM_URL_SIZE];
@@ -354,7 +371,7 @@ static void radio_task(void *arg)
 
         ring_reset(); /* before the status names the new generation */
         if (!url[0]) {
-            set_status(gen, RADIO_STOPPED, RADIO_CODEC_MP3, NULL);
+            set_status(gen, STREAM_STOPPED, STREAM_CODEC_MP3, NULL);
             ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
             continue;
         }
@@ -363,28 +380,28 @@ static void radio_task(void *arg)
          * received once (a cast file can also come from a phone on the star's own network) */
         while (!changed(gen)) {
             if (live && !wifi_sta_connected()) {
-                set_status(gen, RADIO_ERROR, RADIO_CODEC_MP3, "Нет подключения к Wi-Fi");
+                set_status(gen, STREAM_ERROR, STREAM_CODEC_MP3, "Нет подключения к Wi-Fi");
                 ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1000));
                 continue;
             }
-            set_status(gen, RADIO_CONNECTING, RADIO_CODEC_MP3, NULL);
+            set_status(gen, STREAM_CONNECTING, STREAM_CODEC_MP3, NULL);
             bool ended = false;
-            const char *error = stream(url, mime, offset, gen, &ended);
+            const char *error = receive(url, mime, offset, gen, &ended);
             if (changed(gen)) {
                 break;
             }
             if (ended) {
                 ESP_LOGI(TAG, "%s received completely", url);
-                radio_status_t st;
-                radio_get_status(&st);
-                set_status(gen, RADIO_ENDED, st.codec, NULL);
+                stream_status_t st;
+                stream_get_status(&st);
+                set_status(gen, STREAM_ENDED, st.codec, NULL);
                 wait_for_new_request(gen);
                 break;
             }
             ESP_LOGW(TAG, "%s: %s", url, error ? error : "stopped");
-            radio_status_t st;
-            radio_get_status(&st);
-            set_status(gen, RADIO_ERROR, st.codec, error);
+            stream_status_t st;
+            stream_get_status(&st);
+            set_status(gen, STREAM_ERROR, st.codec, error);
             if (!live) {
                 wait_for_new_request(gen);
                 break;
@@ -394,7 +411,7 @@ static void radio_task(void *arg)
     }
 }
 
-void radio_start(void)
+void stream_start(void)
 {
     ring = heap_caps_malloc(RING_SIZE, MALLOC_CAP_SPIRAM);
     ring_lock = xSemaphoreCreateMutex();
@@ -402,10 +419,10 @@ void radio_start(void)
     assert(ring && ring_lock && req_lock);
     status.buffer_size = RING_SIZE;
     /* TLS handshakes need a deep stack */
-    xTaskCreateWithCaps(radio_task, "radio", 8192, NULL, 6, &task, MALLOC_CAP_SPIRAM);
+    xTaskCreateWithCaps(stream_task, "stream", 8192, NULL, 6, &task, MALLOC_CAP_SPIRAM);
 }
 
-uint32_t radio_play(const char *url, const char *mime_hint, bool live, uint32_t offset)
+uint32_t stream_play(const char *url, const char *mime_hint, bool live, uint32_t offset)
 {
     xSemaphoreTake(req_lock, portMAX_DELAY);
     strlcpy(wanted_url, url, sizeof(wanted_url));
@@ -418,12 +435,12 @@ uint32_t radio_play(const char *url, const char *mime_hint, bool live, uint32_t 
     return gen;
 }
 
-void radio_stop(void)
+void stream_stop(void)
 {
-    radio_play("", NULL, false, 0);
+    stream_play("", NULL, false, 0);
 }
 
-uint32_t radio_generation(void)
+uint32_t stream_generation(void)
 {
     xSemaphoreTake(req_lock, portMAX_DELAY);
     uint32_t gen = wanted_gen;
@@ -431,7 +448,7 @@ uint32_t radio_generation(void)
     return gen;
 }
 
-void radio_get_status(radio_status_t *out)
+void stream_get_status(stream_status_t *out)
 {
     xSemaphoreTake(req_lock, portMAX_DELAY);
     *out = status;
@@ -441,24 +458,24 @@ void radio_get_status(radio_status_t *out)
     xSemaphoreGive(ring_lock);
 }
 
-static const char *state_name(radio_state_t s)
+static const char *state_name(stream_state_t s)
 {
     switch (s) {
-    case RADIO_STOPPED: return "stopped";
-    case RADIO_CONNECTING: return "connecting";
-    case RADIO_STREAMING: return "streaming";
-    case RADIO_ERROR: return "error";
-    case RADIO_ENDED: return "ended";
+    case STREAM_STOPPED: return "stopped";
+    case STREAM_CONNECTING: return "connecting";
+    case STREAM_STREAMING: return "streaming";
+    case STREAM_ERROR: return "error";
+    case STREAM_ENDED: return "ended";
     }
     return "unknown";
 }
 
-void radio_status_json(cJSON *out)
+void stream_status_json(cJSON *out)
 {
-    radio_status_t st;
-    radio_get_status(&st);
+    stream_status_t st;
+    stream_get_status(&st);
     cJSON_AddStringToObject(out, "state", state_name(st.state));
-    cJSON_AddStringToObject(out, "codec", codec_name(st.codec));
+    cJSON_AddStringToObject(out, "codec", CODECS[st.codec].name);
     cJSON_AddNumberToObject(out, "buffered", st.buffered);
     cJSON_AddNumberToObject(out, "buffer_size", st.buffer_size);
     cJSON_AddStringToObject(out, "error", st.error);

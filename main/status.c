@@ -9,7 +9,7 @@
 #include "board.h"
 #include "button.h"
 #include "player.h"
-#include "radio.h"
+#include "stream.h"
 #include "sensor.h"
 #include "settings.h"
 #include "status.h"
@@ -48,9 +48,9 @@ static uint32_t check_errors(void)
     player_status_t ps;
     char track[TRACK_NAME_SIZE];
     player_get_status(&ps, track);
-    radio_status_t rs;
-    radio_get_status(&rs);
-    if (ps == PLAYER_RADIO && rs.state == RADIO_ERROR) {
+    stream_status_t rs;
+    stream_get_status(&rs);
+    if (ps == PLAYER_RADIO && rs.state == STREAM_ERROR) {
         e |= 1 << STATUS_ERR_RADIO;
     }
     if (ps == PLAYER_IDLE) {
