@@ -88,8 +88,8 @@ typedef struct {
 
 static uint8_t mac[6];
 static SemaphoreHandle_t lock;          /* session + jitter buffer */
-static volatile bool active;           /* RECORD received, not torn down */
-static volatile bool stop_requested;
+static atomic_bool active;             /* RECORD received, not torn down */
+static atomic_bool stop_requested;
 static uint8_t volume = 60;
 static atomic_bool enabled;
 

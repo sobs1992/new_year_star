@@ -1,3 +1,4 @@
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -30,7 +31,7 @@ static esp_timer_handle_t ap_apply_timer;
 static char ap_password[64]; /* empty: open network */
 static portMUX_TYPE status_lock = portMUX_INITIALIZER_UNLOCKED;
 static wifi_status_t status;
-static volatile bool scanning; /* don't reconnect in the middle of a scan */
+static atomic_bool scanning; /* don't reconnect in the middle of a scan */
 
 static void set_state(wifi_sta_state_t state, wifi_fail_reason_t reason, const char *ip)
 {

@@ -172,4 +172,7 @@ the handlers of web, DLNA and Spotify together.
   the build.
 - Code and comments in English, the web page in Russian. Comments say why: hardware, memory,
   protocol quirks.
+- Messages for people (uploads, Wi-Fi, stream errors) are in Russian. Settings validation errors
+  are in English: the page builds its controls from the limits and never sends values out of
+  range, so those are for developers.
 - Pins only in `board.h`, shared names only in `app_config.h`.

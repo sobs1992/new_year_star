@@ -51,7 +51,8 @@ bool wifi_ap_secure(void);
 void wifi_get_status(wifi_status_t *out);
 bool wifi_sta_connected(void);
 
-/* Blocking scan (~2 s); returns the number of networks written, or -1 on failure */
+/* Blocking scan of both bands (~11 s on the C5); returns the number of networks written, or -1
+ * on failure */
 int wifi_scan(wifi_network_t *out, int max);
 
 struct cJSON;

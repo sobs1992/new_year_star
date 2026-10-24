@@ -431,13 +431,18 @@ static bool parse_radio(const cJSON *jr, radio_settings_t *r, char *err, size_t 
 
 /* Parse into the given copy. Tracks are matched by name: unknown names are skipped (file
  * deleted), tracks missing from the JSON keep their values. "sensor", "radio", "mode" and
- * "cast" are optional so settings saved before they existed still load. */
-static bool parse(const char *json, all_settings_t *s, char *err, size_t err_len)
+ * "cast" are optional so settings saved before they existed still load. revision (may be NULL)
+ * gets the document's "revision", -1 when it has none. */
+static bool parse(const char *json, all_settings_t *s, double *revision, char *err, size_t err_len)
 {
     cJSON *root = cJSON_Parse(json);
     if (root == NULL) {
         snprintf(err, err_len, "invalid JSON");
         return false;
+    }
+    if (revision) {
+        const cJSON *jrev = cJSON_GetObjectItemCaseSensitive(root, "revision");
+        *revision = cJSON_IsNumber(jrev) ? jrev->valuedouble : -1;
     }
 
     bool ok = false;
@@ -582,7 +587,7 @@ void settings_init(void)
     static all_settings_t s; /* too big for the main task stack */
     s = cur;
     char err[96];
-    if (parse(json, &s, err, sizeof(err))) {
+    if (parse(json, &s, NULL, err, sizeof(err))) {
         ESP_LOGI(TAG, "Loaded from NVS");
         cur = s;
         saved_json = json;
@@ -820,14 +825,10 @@ esp_err_t settings_from_json(const char *json, char *err, size_t err_len)
     s = cur;
     xSemaphoreGive(lock);
 
-    if (!parse(json, &s, err, err_len)) {
+    double rev;
+    if (!parse(json, &s, &rev, err, err_len)) {
         return ESP_ERR_INVALID_ARG;
     }
-
-    cJSON *root = cJSON_Parse(json);
-    const cJSON *jrev = cJSON_GetObjectItemCaseSensitive(root, "revision");
-    double rev = cJSON_IsNumber(jrev) ? jrev->valuedouble : -1;
-    cJSON_Delete(root);
 
     xSemaphoreTake(lock, portMAX_DELAY);
     if (rev != revision) {
