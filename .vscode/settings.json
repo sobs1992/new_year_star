@@ -1,6 +1,6 @@
 {
   "idf.currentSetup": "/home/sobs/esp/esp-idf",
-  "idf.port": "/dev/ttyACM0",
+  "idf.port": "/dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_10:BD:A3:CC:11:48-if00",
   "idf.flashType": "UART",
   "idf.openOcdConfigs": ["board/esp32c5-builtin.cfg"],
   "idf.customExtraVars": {

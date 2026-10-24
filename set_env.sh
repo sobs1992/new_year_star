@@ -15,6 +15,7 @@ fi
 
 . "$IDF_PATH/export.sh" > /dev/null || return 1
 
-export ESPPORT=/dev/ttyACM0
+# Stable name: ttyACMx number changes after USB re-enumeration
+export ESPPORT=/dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_10:BD:A3:CC:11:48-if00
 
 echo "ESP-IDF $(cd "$IDF_PATH" && git describe --tags 2>/dev/null) ready, port $ESPPORT"

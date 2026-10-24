@@ -1,0 +1,1095 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Новогодняя звезда</title>
+<style>
+  :root {
+    --bg: #0e1014;
+    --card: #171a21;
+    --line: #262b35;
+    --text: #e9eaee;
+    --muted: #9298a3;
+    --accent: #e5393a;
+    --ok: #3fb67a;
+    --field: #0e1014;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f3f4f6;
+      --card: #ffffff;
+      --line: #e1e4e9;
+      --text: #1b1d22;
+      --muted: #646a74;
+      --field: #f7f8fa;
+    }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 720px; margin: 0 auto; padding: 16px 16px 80px; }
+  header { display: flex; align-items: center; gap: 12px; margin: 4px 0 12px; }
+  header svg { flex: none; }
+  h1 { font-size: 22px; margin: 0; }
+  section {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 16px;
+    margin-bottom: 16px;
+  }
+  h2 { font-size: 17px; margin: 0 0 4px; }
+  .hint { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
+
+  .player { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+  #now { flex: 1; min-width: 180px; margin: 0; font-weight: 600; }
+  .player .row { flex: none; }
+  .mode { margin-top: 14px; }
+  #errors { margin: 10px 0 0; padding: 0; list-style: none; color: var(--accent); font-size: 14px; }
+  #errors li + li { margin-top: 4px; }
+
+  .track { border-top: 1px solid var(--line); padding: 14px 0 4px; }
+  .track:first-of-type { border-top: 0; padding-top: 4px; }
+  .check { display: flex; align-items: center; gap: 10px; font-weight: 600; cursor: pointer; word-break: break-all; margin-bottom: 10px; }
+  .track-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; }
+  .track-fields .wide { grid-column: 1 / -1; }
+  .track-head { display: flex; align-items: flex-start; gap: 8px; }
+  .track-head .check { flex: 1; }
+  .track.off .track-fields { opacity: .4; }
+  .size { color: var(--muted); font-size: 13px; font-weight: 400; margin-left: 6px; white-space: nowrap; }
+
+  button {
+    padding: 8px 14px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--field);
+    color: var(--text);
+    font: inherit;
+    cursor: pointer;
+  }
+  button:disabled { opacity: .5; cursor: default; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.small { padding: 4px 10px; font-size: 14px; color: var(--muted); }
+  .upload {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid var(--line);
+  }
+  .upload .hint { margin: 0; }
+  .upload progress { flex: 1; min-width: 120px; accent-color: var(--accent); }
+
+  .field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+  .slider { display: grid; grid-template-columns: 1fr 76px; gap: 12px; align-items: center; }
+  .readout { text-align: right; color: var(--text); font-variant-numeric: tabular-nums; }
+  .setting { margin-bottom: 14px; }
+  .setting:last-child { margin-bottom: 0; }
+  .setting small { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+
+  input[type=number], input[type=text], input[type=password], select {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--field);
+    color: var(--text);
+    font: inherit;
+  }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  input[type=checkbox] { width: 22px; height: 22px; accent-color: var(--accent); flex: none; }
+  input.invalid { border-color: var(--accent); }
+  .row { display: flex; gap: 10px; align-items: center; }
+  .row select, .row input { flex: 1; min-width: 0; }
+
+  .segmented {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr); /* equal widths whatever the label length */
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    overflow: hidden;
+    margin-bottom: 14px;
+  }
+  @media (max-width: 480px) {
+    #color { grid-auto-flow: row; grid-template-columns: 1fr 1fr; }
+  }
+  .segmented input { position: absolute; opacity: 0; pointer-events: none; }
+  .segmented span { display: flex; align-items: center; justify-content: center; gap: 6px; height: 100%; padding: 10px 6px; cursor: pointer; }
+  .segmented input:checked + span { background: var(--accent); color: #fff; }
+  .segmented input:focus-visible + span { outline: 2px solid var(--text); outline-offset: -2px; }
+  .swatch { width: 12px; height: 12px; border-radius: 50%; flex: none; border: 1px solid rgba(255, 255, 255, .5); }
+
+  .station {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 10px;
+    align-items: center;
+    padding: 10px 0;
+    border-top: 1px solid var(--line);
+  }
+  .station:first-child { border-top: 0; padding-top: 0; }
+  .station .inputs { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .station input[type=radio] { width: 20px; height: 20px; accent-color: var(--accent); }
+  #station-buttons { flex-wrap: wrap; margin-top: 10px; }
+
+  .live {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    margin-bottom: 14px;
+    border-radius: 8px;
+    background: var(--field);
+    font-size: 14px;
+  }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); flex: none; }
+  .dot.on { background: var(--accent); }
+  .dot.idle { background: var(--ok); }
+  h3 { font-size: 15px; margin: 18px 0 8px; padding-top: 14px; border-top: 1px solid var(--line); }
+
+  #status {
+    position: fixed;
+    left: 50%;
+    bottom: 16px;
+    transform: translateX(-50%);
+    max-width: calc(100% - 32px);
+    padding: 8px 14px;
+    border-radius: 999px;
+    background: var(--card);
+    border: 1px solid var(--line);
+    font-size: 14px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, .25);
+    transition: opacity .3s;
+  }
+  #status.hidden { opacity: 0; }
+  #status.ok { color: var(--ok); }
+  #status.error { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <svg width="32" height="32" viewBox="0 0 24 24" aria-hidden="true">
+      <path fill="#e5393a" d="M12 2l2.9 6.6 7.1.6-5.4 4.7 1.6 7L12 17.3 5.8 21l1.6-7L2 9.2l7.1-.6z"/>
+    </svg>
+    <h1>Новогодняя звезда</h1>
+  </header>
+
+  <section>
+    <div class="player">
+      <p id="now">Загрузка…</p>
+      <div class="row">
+        <button class="primary" id="btn-start" disabled>Старт</button>
+        <button id="btn-stop" disabled>Стоп</button>
+      </div>
+    </div>
+    <ul id="errors"></ul>
+    <div class="segmented mode" id="mode">
+      <label><input type="radio" name="mode" value="playlist"><span>Плейлист</span></label>
+      <label><input type="radio" name="mode" value="radio"><span>Интернет-радио</span></label>
+    </div>
+  </section>
+
+  <section data-mode="playlist" hidden>
+    <h2>Плейлист</h2>
+    <p class="hint">Треки играют сверху вниз. Громкость выше 100% может искажать громкие места.</p>
+    <div id="tracks"></div>
+    <div class="upload">
+      <input type="file" id="file" accept=".mp3,audio/mpeg" hidden>
+      <button class="primary" id="upload-btn" disabled>Загрузить MP3</button>
+      <progress id="upload-progress" max="1" value="0" hidden></progress>
+      <span class="hint" id="storage-info"></span>
+    </div>
+  </section>
+
+  <section data-mode="radio" hidden>
+    <h2>Интернет-радио</h2>
+    <p class="hint">Нужно подключение к домашнему Wi-Fi. Подходят потоки MP3 и AAC, а также ссылки на .m3u и .pls.</p>
+    <div class="live"><span class="dot" id="radio-dot"></span><span id="radio-live">—</span></div>
+    <div id="radio-fields"></div>
+    <h3>Станции</h3>
+    <div id="stations"></div>
+    <div class="row" id="station-buttons">
+      <button id="add-station">Добавить станцию</button>
+      <button id="add-presets">Добавить станции из набора</button>
+    </div>
+  </section>
+
+  <section>
+    <h2 id="light-title">Цветомузыка</h2>
+    <p class="hint" id="light-hint"></p>
+    <div class="segmented" id="color">
+      <label><input type="radio" name="color" value="red"><span><i class="swatch" style="background:#e5393a"></i>Красный</span></label>
+      <label><input type="radio" name="color" value="green"><span><i class="swatch" style="background:#3fb67a"></i>Зелёный</span></label>
+      <label><input type="radio" name="color" value="blue"><span><i class="swatch" style="background:#3b7ddd"></i>Синий</span></label>
+      <label><input type="radio" name="color" value="rgb"><span><i class="swatch" style="background:conic-gradient(#e5393a,#3fb67a,#3b7ddd,#e5393a)"></i>RGB</span></label>
+    </div>
+    <div id="light-fields"></div>
+  </section>
+
+  <section>
+    <h2 id="sensor-title">Датчик движения</h2>
+    <p class="hint" id="sensor-hint"></p>
+    <div class="live"><span class="dot" id="sensor-dot"></span><span id="sensor-live">—</span></div>
+    <div id="sensor"></div>
+  </section>
+
+  <section>
+    <h2>Wi-Fi</h2>
+    <p class="hint">Подключите звезду к домашней сети, чтобы слушать радио и открывать эту страницу дома по адресу star.local.</p>
+    <div class="live"><span class="dot" id="wifi-dot"></span><span id="wifi-live">—</span></div>
+    <div class="setting">
+      <label class="field">Сети рядом
+        <span class="row">
+          <select id="wifi-list"><option value="">Нажмите «Найти»</option></select>
+          <button id="wifi-scan">Найти</button>
+        </span>
+      </label>
+    </div>
+    <div class="setting">
+      <label class="field">Имя сети<input type="text" id="wifi-ssid" maxlength="32" autocomplete="off" autocapitalize="off"></label>
+    </div>
+    <div class="setting">
+      <label class="field">Пароль<input type="password" id="wifi-password" maxlength="63" autocomplete="off"></label>
+      <small>Пустой — для открытой сети. Звезда хранит пароль у себя и никому его не показывает</small>
+    </div>
+    <div class="row">
+      <button class="primary" id="wifi-connect">Подключить</button>
+      <button id="wifi-forget">Забыть сеть</button>
+    </div>
+
+    <h3>Сеть звезды</h3>
+    <p class="hint">Своя сеть звезды работает всегда, через неё открывается эта страница без домашнего Wi-Fi.</p>
+    <div class="live"><span class="dot" id="ap-dot"></span><span id="ap-live">—</span></div>
+    <div class="setting">
+      <label class="field">Новый пароль<input type="password" id="ap-password" maxlength="63" autocomplete="new-password"></label>
+      <small>От 8 до 63 символов. Телефоны, подключённые к сети звезды, отключатся: подключитесь заново с новым паролем</small>
+    </div>
+    <div class="row">
+      <button class="primary" id="ap-set">Задать пароль</button>
+      <button id="ap-open">Сделать открытой</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Светодиоды</h2>
+    <p class="hint">Лента WS2812 на выводе D7.</p>
+    <div id="leds"></div>
+  </section>
+</main>
+
+<div id="status" class="hidden"></div>
+
+<script>
+  const SAVE_DELAY_MS = 500;
+  const STATUS_POLL_MS = 1000;
+  const MOTION_HOLD_MS = 4000; /* keep showing "motion" this long: micro-movements flicker */
+  const GATE_M = 0.75;
+  const URL_RE = /^https?:\/\/\S+$/;
+
+  /* Ranges come from the firmware (settings.limits), only presentation is defined here */
+  const LED_FIELDS = [
+    { key: 'count', label: 'Количество светодиодов', step: 1 },
+  ];
+  const LIGHT_FIELDS = [
+    { key: 'min_brightness', label: 'Минимальная яркость', step: 1,
+      hint: 'Фон, ниже которого лента не гаснет, в том числе в паузах' },
+    { key: 'max_brightness', label: 'Максимальная яркость', step: 1,
+      hint: 'На громких местах. 24 светодиода на 255 потребляют около 0,5 А на цвет' },
+    { key: 'attack_ms', label: 'Нарастание, мс', step: 1,
+      hint: 'Как быстро вспыхивает на ударах. Меньше — резче' },
+    { key: 'release_ms', label: 'Затухание, мс', step: 10,
+      hint: 'Как плавно гаснет после удара. Больше — плавнее' },
+    { key: 'gain_halflife_ms', label: 'Адаптация к громкости, мс', step: 100,
+      hint: 'Как быстро эффект подстраивается под тихие и громкие места' },
+  ];
+  const RADIO_FIELDS = [
+    { key: 'volume', label: 'Громкость, %', step: 1,
+      hint: 'Выше 100% может искажать громкие места' },
+  ];
+  const RADIO_SENSOR_FIELDS = [
+    { key: 'sensor_minutes', label: 'Сколько играть радио после срабатывания, мин', step: 1 },
+  ];
+  const SENSOR_FIELDS = [
+    { key: 'max_gate', label: 'Дальность', step: 1,
+      format: v => (v * GATE_M).toFixed(2).replace('.', ',') + ' м',
+      hint: 'Дальше этого расстояния люди не учитываются. Шаг 0,75 м' },
+    { key: 'sensitivity', label: 'Порог срабатывания', step: 1,
+      hint: '40 — заводская настройка радара. Меньше — чувствительнее, больше — грубее. Если срабатывает само по себе, увеличьте' },
+    { key: 'cooldown_s', label: 'Пауза перед повторным запуском, с', step: 1,
+      hint: 'Сколько ждать после конца плейлиста или радио, прежде чем снова реагировать' },
+  ];
+  const LIGHT_HINTS = {
+    red: 'Яркость красного следует за громкостью.',
+    green: 'Яркость зелёного следует за громкостью.',
+    blue: 'Яркость синего следует за громкостью.',
+    rgb: 'Басы зажигают красный, средние частоты — зелёный, высокие — синий.',
+  };
+
+  /* Codes as blinked by the yellow LED on the board (main/status.h) */
+  const ERRORS = {
+    1: 'Не смонтировалось хранилище треков',
+    2: 'Не удаётся подключиться к домашнему Wi-Fi',
+    3: 'Радио: поток не принимается',
+    4: 'Датчик движения включён, но не отвечает',
+    5: 'Нечего играть: все треки выключены или станция не выбрана',
+  };
+
+  let settings = null;
+  let saveTimer = null;
+  let statusTimer = null;
+  let lightSliders = {};
+  let wifiPrefilled = false;
+  let lastMotion = 0;
+
+  /* ---------- small helpers ---------- */
+
+  function showStatus(text, kind, sticky) {
+    const el = document.getElementById('status');
+    el.textContent = text;
+    el.className = kind || '';
+    clearTimeout(statusTimer);
+    if (!sticky) {
+      statusTimer = setTimeout(() => el.classList.add('hidden'), 1500);
+    }
+  }
+
+  function el(tag, props, ...children) {
+    const node = document.createElement(tag);
+    Object.assign(node, props);
+    for (const child of children) {
+      node.append(child);
+    }
+    return node;
+  }
+
+  function clamp(value, min, max) {
+    return Math.min(max, Math.max(min, value));
+  }
+
+  function byteLength(text) {
+    return new TextEncoder().encode(text).length;
+  }
+
+  function formatSize(bytes) {
+    if (bytes < 1024 * 1024) {
+      return Math.ceil(bytes / 1024) + ' КБ';
+    }
+    return (bytes / 1024 / 1024).toFixed(1).replace('.', ',') + ' МБ';
+  }
+
+  async function api(path, options) {
+    const resp = await fetch(path, { cache: 'no-store', ...options });
+    const result = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      const error = new Error(result.error || 'HTTP ' + resp.status);
+      error.status = resp.status;
+      throw error;
+    }
+    return result;
+  }
+
+  function postJson(path, body) {
+    return api(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  }
+
+  /* ---------- controls ---------- */
+
+  /* min/max must be set before value: a range input clamps value to its current (default 0..100) bounds */
+  function input(type, value, min, max, step) {
+    const node = el('input', { type, min, max, step });
+    node.value = value;
+    return node;
+  }
+
+  function numberInput(value, min, max, step, onChange) {
+    const box = input('number', value, min, max, step);
+    box.inputMode = 'decimal';
+    box.addEventListener('change', () => {
+      const v = clamp(Number(box.value) || 0, min, max);
+      box.value = v;
+      onChange(v);
+    });
+    return box;
+  }
+
+  /* Range + number box kept in sync, or range + text readout when format is given */
+  function slider(value, min, max, step, onChange, format) {
+    const range = input('range', value, min, max, step);
+    const side = format
+      ? el('span', { className: 'readout', textContent: format(value) })
+      : numberInput(value, min, max, step, v => { range.value = v; onChange(v); });
+    const show = v => {
+      if (format) {
+        side.textContent = format(v);
+      } else {
+        side.value = v;
+      }
+    };
+    range.addEventListener('input', () => {
+      show(Number(range.value));
+      onChange(Number(range.value));
+    });
+    const wrap = el('div', { className: 'slider' }, range, side);
+    wrap.set = v => {
+      range.value = v;
+      show(v);
+    };
+    return wrap;
+  }
+
+  function checkbox(label, checked, onChange) {
+    const box = el('input', { type: 'checkbox', checked });
+    box.addEventListener('change', () => onChange(box.checked));
+    return el('label', { className: 'check' }, box, el('span', { textContent: label }));
+  }
+
+  /* Sliders for the fields of values; limits holds [min, max] per key. Returns them by key. */
+  function renderFields(root, values, limits, fields, onChange) {
+    const sliders = {};
+    for (const f of fields) {
+      const [min, max] = limits[f.key];
+      const s = slider(values[f.key], min, max, f.step, v => {
+        values[f.key] = v;
+        if (onChange) {
+          onChange(f.key);
+        }
+        scheduleSave();
+      }, f.format);
+      sliders[f.key] = s;
+      const block = el('div', { className: 'setting' }, el('div', { className: 'field' }, f.label), s);
+      if (f.hint) {
+        block.append(el('small', { textContent: f.hint }));
+      }
+      root.append(block);
+    }
+    return sliders;
+  }
+
+  /* Radio buttons of a segmented control bound to obj[key] */
+  function bindSegmented(id, obj, key, onChange) {
+    for (const radio of document.querySelectorAll('#' + id + ' input')) {
+      radio.checked = radio.value === obj[key];
+      radio.onchange = () => {
+        obj[key] = radio.value;
+        if (onChange) {
+          onChange();
+        }
+        scheduleSave();
+      };
+    }
+  }
+
+  /* ---------- mode ---------- */
+
+  /* Show only what belongs to the selected mode */
+  function applyMode() {
+    for (const section of document.querySelectorAll('[data-mode]')) {
+      section.hidden = section.dataset.mode !== settings.mode;
+    }
+    renderLight();
+    renderSensor();
+  }
+
+  /* ---------- playlist ---------- */
+
+  function renderStorage() {
+    const st = settings.storage;
+    document.getElementById('storage-info').textContent =
+      'Занято ' + formatSize(st.used) + ' из ' + formatSize(st.total) +
+      '. Можно загрузить файл до ' + formatSize(st.upload_max);
+  }
+
+  function renderTracks() {
+    const root = document.getElementById('tracks');
+    const lim = settings.limits.track;
+    root.textContent = '';
+    if (settings.tracks.length === 0) {
+      root.textContent = 'Треков нет. Загрузите MP3 кнопкой ниже.';
+      return;
+    }
+    for (const t of settings.tracks) {
+      const card = el('div', { className: 'track' + (t.enabled ? '' : ' off') });
+      const check = checkbox(t.name, t.enabled, on => {
+        t.enabled = on;
+        card.classList.toggle('off', !on);
+        scheduleSave();
+      });
+      check.append(el('span', { className: 'size', textContent: formatSize(t.size) }));
+      const del = el('button', { className: 'small', textContent: 'Удалить', title: 'Удалить файл' });
+      del.addEventListener('click', () => removeTrack(t.name));
+      card.append(el('div', { className: 'track-head' }, check, del));
+      card.append(el('div', { className: 'track-fields' },
+        el('label', { className: 'field' }, 'Повторов подряд',
+          numberInput(t.repeat, lim.repeat[0], lim.repeat[1], 1,
+            v => { t.repeat = v; scheduleSave(); })),
+        el('label', { className: 'field' }, 'Пауза в конце, с',
+          numberInput(t.pause_ms / 1000, lim.pause_ms[0] / 1000, lim.pause_ms[1] / 1000, 0.1,
+            v => { t.pause_ms = Math.round(v * 1000); scheduleSave(); })),
+        el('div', { className: 'field wide' }, 'Громкость, %',
+          slider(t.volume, lim.volume[0], lim.volume[1], 1,
+            v => { t.volume = v; scheduleSave(); })),
+      ));
+      root.append(card);
+    }
+  }
+
+  /* Checks the firmware would reject anyway, to fail before sending megabytes */
+  function uploadProblem(file) {
+    const lim = settings.limits;
+    if (!/\.mp3$/i.test(file.name)) {
+      return 'Можно загружать только файлы .mp3';
+    }
+    if (file.name.startsWith('.') || /[\/\\]/.test(file.name)) {
+      return 'Недопустимое имя файла';
+    }
+    if (byteLength(file.name) > lim.max_name_bytes) {
+      return 'Слишком длинное имя файла, переименуйте его';
+    }
+    if (settings.tracks.some(t => t.name === file.name)) {
+      return 'Файл с таким именем уже есть';
+    }
+    if (settings.tracks.length >= lim.max_tracks) {
+      return 'Не больше ' + lim.max_tracks + ' треков';
+    }
+    if (file.size > settings.storage.upload_max) {
+      return 'Файл ' + formatSize(file.size) + ' не помещается, свободно ' + formatSize(settings.storage.upload_max);
+    }
+    return null;
+  }
+
+  /* XHR rather than fetch: only it reports upload progress */
+  function sendFile(file, onProgress) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/tracks?name=' + encodeURIComponent(file.name));
+      xhr.upload.onprogress = e => e.lengthComputable && onProgress(e.loaded / e.total);
+      xhr.onload = () => {
+        let error;
+        try {
+          error = JSON.parse(xhr.responseText).error;
+        } catch (e) {
+          error = null;
+        }
+        xhr.status === 200 ? resolve() : reject(new Error(error || 'HTTP ' + xhr.status));
+      };
+      xhr.onerror = () => reject(new Error('нет связи'));
+      xhr.send(file);
+    });
+  }
+
+  async function upload(file) {
+    const problem = uploadProblem(file);
+    if (problem) {
+      showStatus(problem, 'error', true);
+      return;
+    }
+    const button = document.getElementById('upload-btn');
+    const progress = document.getElementById('upload-progress');
+    await flushSave();
+    button.disabled = true;
+    progress.value = 0;
+    progress.hidden = false;
+    showStatus('Загрузка ' + file.name + '…', '', true);
+    try {
+      await sendFile(file, p => { progress.value = p; });
+      showStatus('Загружено: ' + file.name, 'ok');
+    } catch (e) {
+      showStatus('Не загружено: ' + e.message, 'error', true);
+    }
+    progress.hidden = true;
+    button.disabled = false;
+    await load();
+  }
+
+  async function removeTrack(name) {
+    if (!confirm('Удалить ' + name + '?')) {
+      return;
+    }
+    await flushSave();
+    try {
+      await api('/api/tracks?name=' + encodeURIComponent(name), { method: 'DELETE' });
+      showStatus('Удалено: ' + name, 'ok');
+    } catch (e) {
+      showStatus('Не удалено: ' + e.message, 'error', true);
+    }
+    await load();
+  }
+
+  /* ---------- radio ---------- */
+
+  /* Problem with a station's fields, or null */
+  function stationProblem(st) {
+    const lim = settings.limits;
+    if (!st.name.trim() || byteLength(st.name) > lim.max_station_name_bytes) {
+      return 'Название станции: от 1 до ' + lim.max_station_name_bytes + ' байт';
+    }
+    if (!URL_RE.test(st.url) || byteLength(st.url) > lim.max_url_bytes) {
+      return 'Адрес станции «' + st.name + '» должен начинаться с http:// или https://';
+    }
+    return null;
+  }
+
+  /* Presets whose stream is not in the list yet */
+  function missingPresets() {
+    const urls = new Set(settings.radio.stations.map(st => st.url));
+    return settings.station_presets.filter(p => !urls.has(p.url));
+  }
+
+  function renderStations() {
+    const radio = settings.radio;
+    const root = document.getElementById('stations');
+    root.textContent = '';
+    radio.stations.forEach((st, i) => {
+      const pick = el('input', { type: 'radio', name: 'station', checked: radio.current === i, title: 'Слушать' });
+      pick.addEventListener('change', () => { radio.current = i; scheduleSave(); });
+      const name = el('input', { type: 'text', value: st.name, placeholder: 'Название' });
+      const url = el('input', { type: 'text', value: st.url, placeholder: 'https://…', inputMode: 'url' });
+      url.autocapitalize = 'off';
+      url.classList.toggle('invalid', !URL_RE.test(st.url));
+      name.addEventListener('change', () => { st.name = name.value.trim(); scheduleSave(); });
+      url.addEventListener('change', () => {
+        st.url = url.value.trim();
+        url.classList.toggle('invalid', !URL_RE.test(st.url));
+        scheduleSave();
+      });
+      const del = el('button', { className: 'small', textContent: 'Удалить' });
+      del.addEventListener('click', () => {
+        radio.stations.splice(i, 1);
+        if (radio.current === i) {
+          radio.current = radio.stations.length ? 0 : -1;
+        } else if (radio.current > i) {
+          radio.current--;
+        }
+        renderStations();
+        scheduleSave();
+      });
+      root.append(el('div', { className: 'station' }, pick, el('div', { className: 'inputs' }, name, url), del));
+    });
+    if (radio.stations.length === 0) {
+      root.textContent = 'Станций нет. Добавьте адрес потока.';
+    }
+    const full = radio.stations.length >= settings.limits.max_stations;
+    document.getElementById('add-station').disabled = full;
+    document.getElementById('add-presets').disabled = full || missingPresets().length === 0;
+  }
+
+  function addStation() {
+    const radio = settings.radio;
+    radio.stations.push({ name: 'Станция ' + (radio.stations.length + 1), url: '' });
+    if (radio.current < 0) {
+      radio.current = radio.stations.length - 1;
+    }
+    renderStations();
+    const urls = document.querySelectorAll('#stations input[inputmode=url]');
+    urls[urls.length - 1].focus();
+    /* saved once the address is filled in */
+  }
+
+  function addPresets() {
+    const radio = settings.radio;
+    const room = settings.limits.max_stations - radio.stations.length;
+    const added = missingPresets().slice(0, room);
+    radio.stations.push(...added.map(p => ({ ...p })));
+    if (radio.current < 0 && radio.stations.length) {
+      radio.current = 0;
+    }
+    renderStations();
+    scheduleSave();
+    showStatus('Добавлено станций: ' + added.length, 'ok');
+  }
+
+  function renderRadioFields() {
+    const root = document.getElementById('radio-fields');
+    root.textContent = '';
+    renderFields(root, settings.radio, settings.limits.radio, RADIO_FIELDS);
+  }
+
+  /* ---------- light music ---------- */
+
+  /* Firmware rejects min > max, so drag the other one along */
+  function keepBrightnessOrder(changed) {
+    const light = settings.led[settings.mode];
+    if (light.min_brightness <= light.max_brightness) {
+      return;
+    }
+    if (changed === 'min_brightness') {
+      light.max_brightness = light.min_brightness;
+      lightSliders.max_brightness.set(light.max_brightness);
+    } else if (changed === 'max_brightness') {
+      light.min_brightness = light.max_brightness;
+      lightSliders.min_brightness.set(light.min_brightness);
+    }
+  }
+
+  /* Settings of the current mode: each mode has its own */
+  function renderLight() {
+    const light = settings.led[settings.mode];
+    document.getElementById('light-title').textContent =
+      settings.mode === 'radio' ? 'Цветомузыка для радио' : 'Цветомузыка для плейлиста';
+    const showHint = () => {
+      document.getElementById('light-hint').textContent = LIGHT_HINTS[light.color];
+    };
+    showHint();
+    bindSegmented('color', light, 'color', showHint);
+    const root = document.getElementById('light-fields');
+    root.textContent = '';
+    lightSliders = renderFields(root, light, settings.limits.light, LIGHT_FIELDS, keepBrightnessOrder);
+  }
+
+  function renderLeds() {
+    const root = document.getElementById('leds');
+    root.textContent = '';
+    renderFields(root, settings.led, settings.limits.led, LED_FIELDS);
+  }
+
+  /* ---------- sensor ---------- */
+
+  /* Settings of the current mode: each mode has its own */
+  function renderSensor() {
+    const root = document.getElementById('sensor');
+    const sensor = settings.sensor[settings.mode];
+    const radio = settings.mode === 'radio';
+    document.getElementById('sensor-title').textContent =
+      radio ? 'Датчик движения для радио' : 'Датчик движения для плейлиста';
+    document.getElementById('sensor-hint').textContent = 'Радар 24 ГГц на выводах D2/D3. ' +
+      (radio ? 'Когда включён, после срабатывания радио играет заданное время.'
+             : 'Когда включён, после срабатывания плейлист проигрывается один раз.');
+    root.textContent = '';
+    root.append(checkbox('Запускать по датчику', sensor.enabled, on => {
+      sensor.enabled = on;
+      renderSensor();
+      scheduleSave();
+    }));
+    if (!sensor.enabled) {
+      root.append(el('p', { className: 'hint', textContent:
+        radio ? 'Выключен: радио играет постоянно, пока не нажат «Стоп».'
+                                  : 'Выключен: плейлист играет по кругу, пока не нажат «Стоп».' }));
+      return;
+    }
+
+    const trigger = el('select', {},
+      el('option', { value: 'motion', textContent: 'Только движение' }),
+      el('option', { value: 'presence', textContent: 'Движение или присутствие' }));
+    trigger.value = sensor.trigger;
+    trigger.addEventListener('change', () => { sensor.trigger = trigger.value; scheduleSave(); });
+    root.append(el('div', { className: 'setting' },
+      el('label', { className: 'field' }, 'Реагировать на', trigger),
+      el('small', { textContent: 'Присутствие: срабатывает и на человека, который стоит неподвижно' })));
+    renderFields(root, sensor, settings.limits.sensor, SENSOR_FIELDS);
+    if (radio) {
+      renderFields(root, settings.radio, settings.limits.radio, RADIO_SENSOR_FIELDS);
+    }
+  }
+
+  /* ---------- saving ---------- */
+
+  function scheduleSave() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(save, SAVE_DELAY_MS);
+  }
+
+  /* Send a pending change now, before the page reloads the settings */
+  async function flushSave() {
+    if (saveTimer) {
+      clearTimeout(saveTimer);
+      await save();
+    }
+  }
+
+  async function save() {
+    saveTimer = null;
+    for (const st of settings.radio.stations) {
+      const problem = stationProblem(st);
+      if (problem) {
+        showStatus(problem, 'error', true);
+        return;
+      }
+    }
+    showStatus('Сохранение…', '', true);
+    const { limits, storage, station_presets, ...body } = settings;
+    try {
+      const result = await postJson('/api/settings', body);
+      settings.revision = result.revision;
+      showStatus('Сохранено', 'ok');
+    } catch (e) {
+      if (e.status === 409) {
+        /* Changed from another page or device: show the current state instead of overwriting it */
+        await load();
+        showStatus('Настройки изменились в другом месте, показаны актуальные. Повторите изменение', 'error', true);
+      } else {
+        showStatus('Не сохранено: ' + e.message, 'error', true);
+      }
+    }
+  }
+
+  /* ---------- start / stop ---------- */
+
+  async function control(action) {
+    try {
+      await flushSave();
+      await postJson('/api/player', { action });
+      setTimeout(pollStatus, 300);
+    } catch (e) {
+      showStatus('Не получилось: ' + e.message, 'error', true);
+    }
+  }
+
+  function showPlayer(p) {
+    const texts = {
+      playing: 'Играет ' + p.track,
+      pause: 'Пауза после ' + p.track,
+      radio: 'Радио: ' + p.track,
+      waiting: 'Ждёт срабатывания датчика',
+      stopped: 'Остановлено',
+      idle: settings.mode === 'radio' ? 'Радиостанция не выбрана' : 'Все треки выключены',
+    };
+    document.getElementById('now').textContent = texts[p.state] || p.state;
+    const active = ['playing', 'pause', 'radio'].includes(p.state);
+    /* With the sensor, "start" while waiting plays right away */
+    document.getElementById('btn-start').disabled = active;
+    document.getElementById('btn-stop').disabled = p.state === 'stopped';
+  }
+
+  /* ---------- live status ---------- */
+
+  function showErrors(codes) {
+    const list = document.getElementById('errors');
+    list.textContent = '';
+    for (const code of codes) {
+      const blinks = code + (code === 1 ? ' раз' : code < 5 ? ' раза' : ' раз');
+      list.append(el('li', { textContent: (ERRORS[code] || 'Ошибка ' + code) + ' (светодиод мигает ' + blinks + ')' }));
+    }
+  }
+
+  function setLive(id, text, dot) {
+    document.getElementById(id + '-live').textContent = text;
+    document.getElementById(id + '-dot').className = 'dot' + (dot ? ' ' + dot : '');
+  }
+
+  function showSensor(s) {
+    if (!s.online) {
+      setLive('sensor', 'Нет связи с датчиком. Проверьте подключение D2, D3, 3V3, GND');
+    } else if (s.target === 'none') {
+      setLive('sensor', 'Никого нет', 'idle');
+    } else {
+      if (s.target === 'moving' || s.target === 'both') {
+        lastMotion = Date.now();
+      }
+      const m = (s.distance_cm / 100).toFixed(1).replace('.', ',') + ' м';
+      /* The radar measures a still target's distance too roughly to show it */
+      setLive('sensor', Date.now() - lastMotion < MOTION_HOLD_MS ? 'Движение, ' + m : 'Кто-то рядом, неподвижно', 'on');
+    }
+  }
+
+  function showWifi(w) {
+    const ssid = '«' + w.ssid + '»';
+    switch (w.state) {
+      case 'connected':
+        setLive('wifi', 'Подключено к ' + ssid + ', ' + w.ip + ', ' + w.hostname +
+          ', сигнал ' + w.rssi + ' дБм', 'idle');
+        break;
+      case 'connecting':
+        setLive('wifi', 'Подключение к ' + ssid + '…', 'on');
+        break;
+      case 'failed':
+        setLive('wifi', {
+          wrong_password: 'Неверный пароль для ' + ssid + ', повтор через 5 с',
+          not_found: 'Сеть ' + ssid + ' не найдена, повтор через 5 с',
+        }[w.reason] || 'Не удалось подключиться к ' + ssid + ', повтор через 5 с', 'on');
+        break;
+      default:
+        setLive('wifi', 'Не подключена к домашней сети');
+    }
+    setLive('ap', w.ap_ssid + (w.ap_secure ? ' — защищена паролем' : ' — открытая, без пароля'),
+      w.ap_secure ? 'idle' : 'on');
+    document.getElementById('ap-open').disabled = !w.ap_secure;
+    const ssidInput = document.getElementById('wifi-ssid');
+    if (!wifiPrefilled && document.activeElement !== ssidInput) {
+      ssidInput.value = w.ssid;
+      wifiPrefilled = true;
+    }
+  }
+
+  function showRadio(r) {
+    switch (r.state) {
+      case 'connecting':
+        setLive('radio', 'Подключение…', 'on');
+        break;
+      case 'streaming':
+        setLive('radio', 'Принимается поток ' + r.codec + ', в буфере ' + formatSize(r.buffered), 'idle');
+        break;
+      case 'error':
+        setLive('radio', r.error, 'on');
+        break;
+      default:
+        setLive('radio', 'Остановлено');
+    }
+  }
+
+  async function pollStatus() {
+    clearTimeout(pollStatus.timer);
+    try {
+      const st = await api('/api/status');
+      showPlayer(st.player);
+      showErrors(st.errors);
+      showSensor(st.sensor);
+      showWifi(st.wifi);
+      showRadio(st.radio);
+    } catch (e) {
+      document.getElementById('now').textContent = 'Нет связи со звездой';
+    }
+    pollStatus.timer = setTimeout(pollStatus, STATUS_POLL_MS);
+  }
+
+  /* ---------- Wi-Fi ---------- */
+
+  async function wifiScan() {
+    const button = document.getElementById('wifi-scan');
+    const list = document.getElementById('wifi-list');
+    button.disabled = true;
+    button.textContent = 'Поиск…';
+    try {
+      const result = await api('/api/wifi/scan');
+      list.textContent = '';
+      list.append(el('option', { value: '', textContent: 'Найдено сетей: ' + result.networks.length }));
+      for (const n of result.networks) {
+        const quality = n.rssi > -60 ? 'отличный' : n.rssi > -72 ? 'хороший' : 'слабый';
+        list.append(el('option', { value: n.ssid, textContent: n.ssid + ' — ' + quality + (n.secure ? '' : ', открытая') }));
+      }
+    } catch (e) {
+      showStatus(e.message, 'error', true);
+    }
+    button.disabled = false;
+    button.textContent = 'Найти';
+  }
+
+  async function wifiSend(ssid, password, message) {
+    try {
+      await postJson('/api/wifi', { ssid, password });
+      showStatus(message, 'ok');
+    } catch (e) {
+      showStatus('Не получилось: ' + e.message, 'error', true);
+    }
+  }
+
+  function wifiConnect() {
+    const ssid = document.getElementById('wifi-ssid').value.trim();
+    const password = document.getElementById('wifi-password').value;
+    if (!ssid) {
+      showStatus('Укажите имя сети', 'error', true);
+      return;
+    }
+    if (password && password.length < 8) {
+      showStatus('Пароль Wi-Fi не короче 8 символов', 'error', true);
+      return;
+    }
+    wifiSend(ssid, password, 'Подключение к «' + ssid + '»');
+    document.getElementById('wifi-password').value = '';
+  }
+
+  async function apPassword(password) {
+    const question = password
+      ? 'Задать пароль сети звезды? Телефоны, подключённые к ней, отключатся.'
+      : 'Сделать сеть звезды открытой? К ней сможет подключиться любой, кто рядом.';
+    if (!confirm(question)) {
+      return;
+    }
+    try {
+      await postJson('/api/wifi/ap', { password });
+      document.getElementById('ap-password').value = '';
+      showStatus(password ? 'Пароль задан, подключитесь к сети заново' : 'Сеть звезды открыта', 'ok', true);
+    } catch (e) {
+      showStatus('Не получилось: ' + e.message, 'error', true);
+    }
+  }
+
+  function apSetPassword() {
+    const password = document.getElementById('ap-password').value;
+    if (password.length < 8 || password.length > 63) {
+      showStatus('Пароль от 8 до 63 символов', 'error', true);
+      return;
+    }
+    apPassword(password);
+  }
+
+  function wifiForget() {
+    if (confirm('Отключить звезду от домашней сети? Радио перестанет работать.')) {
+      document.getElementById('wifi-ssid').value = '';
+      wifiSend('', '', 'Сеть забыта');
+    }
+  }
+
+  /* ---------- start ---------- */
+
+  async function load() {
+    try {
+      settings = await api('/api/settings');
+    } catch (e) {
+      document.getElementById('now').textContent = 'Нет связи со звездой: ' + e.message;
+      return false;
+    }
+    bindSegmented('mode', settings, 'mode', applyMode);
+    renderTracks();
+    renderStorage();
+    renderStations();
+    renderRadioFields();
+    renderLeds();
+    applyMode();
+    document.getElementById('upload-btn').disabled = false;
+    return true;
+  }
+
+  async function init() {
+    document.getElementById('btn-start').addEventListener('click', () => control('start'));
+    document.getElementById('btn-stop').addEventListener('click', () => control('stop'));
+    document.getElementById('add-station').addEventListener('click', addStation);
+    document.getElementById('add-presets').addEventListener('click', addPresets);
+    document.getElementById('wifi-scan').addEventListener('click', wifiScan);
+    document.getElementById('wifi-connect').addEventListener('click', wifiConnect);
+    document.getElementById('wifi-forget').addEventListener('click', wifiForget);
+    document.getElementById('ap-set').addEventListener('click', apSetPassword);
+    document.getElementById('ap-open').addEventListener('click', () => apPassword(''));
+    document.getElementById('wifi-list').addEventListener('change', e => {
+      if (e.target.value) {
+        document.getElementById('wifi-ssid').value = e.target.value;
+        document.getElementById('wifi-password').focus();
+      }
+    });
+    const file = document.getElementById('file');
+    document.getElementById('upload-btn').addEventListener('click', () => file.click());
+    file.addEventListener('change', () => {
+      const chosen = file.files[0];
+      file.value = '';
+      if (chosen) {
+        upload(chosen);
+      }
+    });
+    /* Back to the tab: pick up changes made elsewhere meanwhile */
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && !saveTimer && settings) {
+        load();
+      }
+    });
+    if (await load()) {
+      pollStatus();
+    }
+  }
+
+  init();
+</script>
+</body>
+</html>

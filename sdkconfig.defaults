@@ -1,3 +1,16 @@
 # ESP32-C5HR8: 8MB flash, 8MB embedded PSRAM
 CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
 CONFIG_SPIRAM=y
+# Skip PSRAM test at boot (~1.8 s)
+# CONFIG_SPIRAM_MEMTEST is not set
+# Own partition table: 2.5MB app + LittleFS partition with the tracks
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+# Console on USB-Serial-JTAG only: frees UART0 pins GPIO11/GPIO12 (D6/D7)
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+# Captive portal: DNS + HTTP + phones probing many URLs at once
+CONFIG_LWIP_MAX_SOCKETS=16
+# Wi-Fi/LWIP and TLS buffers in PSRAM: web radio over HTTPS needs a lot of RAM
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
