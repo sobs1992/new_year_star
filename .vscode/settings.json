@@ -1,0 +1,29 @@
+{
+  "idf.currentSetup": "/home/sobs/esp/esp-idf",
+  "idf.port": "/dev/ttyACM0",
+  "idf.flashType": "UART",
+  "idf.openOcdConfigs": ["board/esp32c5-builtin.cfg"],
+  "idf.customExtraVars": {
+    "IDF_TARGET": "esp32c5"
+  },
+  "C_Cpp.intelliSenseEngine": "default",
+  "idf.extensionActivationMode": "always",
+  "cmake.configureOnOpen": false,
+  "cmake.configureOnEdit": false,
+  "cmake.automaticReconfigure": false,
+  "cmake.autoSelectActiveFolder": false,
+  "cmake.options.advanced": {
+    "build": {
+      "statusBarVisibility": "inherit",
+      "inheritDefault": "hidden"
+    },
+    "launch": {
+      "statusBarVisibility": "inherit",
+      "inheritDefault": "hidden"
+    },
+    "debug": {
+      "statusBarVisibility": "inherit",
+      "inheritDefault": "hidden"
+    }
+  }
+}
